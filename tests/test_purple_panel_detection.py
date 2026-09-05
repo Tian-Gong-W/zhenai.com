@@ -1,4 +1,4 @@
-"""Regression checks for real-time purple visibility detection.
+"""Regression checks for the certification-only purple eligibility rule.
 
 Run with: python3 tests/test_purple_panel_detection.py
 """
@@ -24,47 +24,47 @@ with tempfile.TemporaryDirectory() as temp_dir:
     crawler = object.__new__(service.ZhenaiCrawler)
 
     recent_certification = BASE_NOW - 26 * 3600
-    # Certification and avatar records alone must never be treated as a visible purple panel.
+    window_start = BASE_NOW - service.CERTIFICATION_WINDOW_HOURS * 3600
+
+    # A recent certification without any daily post qualifies.
     assert crawler.has_purple_panel(recent_certification * 1000, [
         moment(6, recent_certification), moment(4, recent_certification + 60)
-    ], now=BASE_NOW) is False
-
-    # A daily type-0 post after certification and within the real-time 48-hour window qualifies.
-    assert crawler.has_purple_panel(recent_certification * 1000, [
-        moment(6, recent_certification), moment(0, recent_certification + 60)
     ], now=BASE_NOW) is True
 
-    # type-1 is also a daily post and qualifies.
+    # Recent type-0 and type-1 posts do not disqualify the member.
     assert crawler.has_purple_panel(recent_certification * 1000, [
-        moment(6, recent_certification), moment(1, recent_certification + 60)
+        moment(6, recent_certification), moment(0, recent_certification + 60),
+        moment(1, recent_certification + 120),
     ], now=BASE_NOW) is True
 
-    # Old posts, even type 0/1, are before the latest certification and must not qualify.
+    # A daily type-0/1 post older than the real-time 48-hour window disqualifies.
     assert crawler.has_purple_panel(recent_certification * 1000, [
-        moment(1, recent_certification - 180 * 86400), moment(6, recent_certification)
+        moment(1, window_start - 1), moment(6, recent_certification)
     ], now=BASE_NOW) is False
 
-    # Other types are not daily posts for this rule.
+    # System/profile cards are not daily posts and cannot disqualify.
     assert crawler.has_purple_panel(recent_certification * 1000, [
-        moment(6, recent_certification), moment(2, recent_certification + 60),
-        moment(8, recent_certification + 120), moment(12, recent_certification + 180)
-    ], now=BASE_NOW) is False
+        moment(2, window_start - 86400), moment(4, window_start - 86400),
+        moment(5, window_start - 86400), moment(6, recent_certification),
+        moment(7, window_start - 86400), moment(8, window_start - 86400),
+        moment(12, window_start - 86400),
+    ], now=BASE_NOW) is True
 
-    # Certification outside the trailing 48-hour window must not qualify.
+    # Certification outside the trailing 48-hour window never qualifies.
     old_certification = BASE_NOW - 49 * 3600
     assert crawler.has_purple_panel(old_certification * 1000, [
-        moment(6, old_certification), moment(0, old_certification + 60)
+        moment(6, old_certification)
     ], now=BASE_NOW) is False
 
-    # When multiple certification cards exist, parsing uses the latest one.
+    # Parsing uses the latest certification card rather than an earlier one.
     original_time = service.time.time
     service.time.time = lambda: BASE_NOW
     parsed = crawler.parse_moments_times([
         moment(6, BASE_NOW - 9 * 86400), moment(1, BASE_NOW - 8 * 86400),
-        moment(6, recent_certification), moment(0, recent_certification + 60),
+        moment(6, recent_certification),
     ])
     service.time.time = original_time
-    assert parsed[3] is True
+    assert parsed[3] is False
 
 os.environ.pop("ZHENAI_BASE_DIR", None)
-print("PASS: purple visibility requires a post-certification type-0/1 daily moment within 48 hours")
+print("PASS: purple eligibility requires recent certification and no pre-window type-0/1 daily moments")

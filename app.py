@@ -815,10 +815,11 @@ class ZhenaiCrawler:
 
     def has_purple_panel(self, cert_ts, moments, now=None):
         """
-        紫图可见：实名认证后的实时 48 小时内，存在 type 0 或 type 1 日常动态。
+        紫图可见：最新实名认证处于实时 48 小时内，且不存在 48 小时前的日常动态。
 
-        认证时间本身必须处于当前时刻向前 48 小时内。认证前的历史动态，
-        以及 type 2/4/5/6/7/8/12 等非日常动态，一律不计入紫图判定。
+        认证后不要求发布任何动态。type 0/1 视为用户日常动态；只要存在
+        早于当前实时 48 小时窗口的 type 0/1 动态，即不满足紫图要求。
+        type 2/4/5/6/7/8/12 等资料、头像、认证与系统卡不作为动态记录。
         """
         if not cert_ts or not moments:
             return False
@@ -826,16 +827,17 @@ class ZhenaiCrawler:
         certification_seconds = float(cert_ts) / 1000
         if not reference_now - CERTIFICATION_WINDOW_HOURS * 3600 <= certification_seconds <= reference_now:
             return False
+        window_start = reference_now - CERTIFICATION_WINDOW_HOURS * 3600
         for item in moments:
             moment = item.get("moment") or {}
             moment_type = moment.get("type", -1)
             moment_timestamp = moment.get("createTime") or 0
-            if moment_type in (0, 1) and certification_seconds <= moment_timestamp / 1000 <= reference_now:
-                return True
-        return False
+            if moment_type in (0, 1) and moment_timestamp / 1000 < window_start:
+                return False
+        return True
 
     def parse_moments_times(self, moments, object_id=None, check_purple=True):
-        """解析动态时间（最新、实名认证、最早）+ 紫图窗口是否真正激活动态入口"""
+        """解析动态时间（最新、实名认证、最早）+ 紫图资格。"""
         if not moments:
             return "", "", "", False
 
