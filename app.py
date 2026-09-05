@@ -847,7 +847,7 @@ class ZhenaiCrawler:
         contents = show_data.get("contents") if isinstance(show_data, dict) else None
         return isinstance(contents, list) and len(contents) > 0
 
-    def parse_moments_times(self, moments, object_id=None):
+    def parse_moments_times(self, moments, object_id=None, check_purple=True):
         """解析动态时间（最新、实名认证、最早）+ 紫图窗口是否真正激活动态入口"""
         if not moments:
             return "", "", "", False
@@ -865,7 +865,7 @@ class ZhenaiCrawler:
                 break
 
         has_recent = False
-        if cert_ts > 0 and object_id is not None:
+        if check_purple and cert_ts > 0 and object_id is not None:
             has_recent = self.has_purple_panel(object_id, cert_ts, moments=moments)
 
         earliest = fmt(moments[-1].get("moment", {}).get("createTime")) if not cert else ""
@@ -896,7 +896,7 @@ def process_member(crawler, mid, scraped_ids, cache_file,
     if cert_days > 0:
         pre_moments = crawler.get_moments(mid)
         _, cert_time, _, _ = crawler.parse_moments_times(
-            pre_moments, object_id=mid
+            pre_moments, object_id=mid, check_purple=False
         )
         # 没有实名 或 实名超过N天 → 跳过（紫图只打标签，不拦写入）
         if not cert_time:

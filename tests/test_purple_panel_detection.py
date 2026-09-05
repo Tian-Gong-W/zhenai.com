@@ -27,6 +27,11 @@ with tempfile.TemporaryDirectory() as temp_dir:
     _, _, _, panel_visible = crawler.parse_moments_times(moments, object_id="member-1")
     assert panel_visible is False
 
+    requests_made = []
+    crawler.get_show_moments = lambda object_id: requests_made.append(object_id) or {"contents": [{"id": "visible"}]}
+    _, _, _, prescreen_flag = crawler.parse_moments_times(moments, object_id="member-1", check_purple=False)
+    assert prescreen_flag is False and requests_made == []
+
     crawler.get_show_moments = lambda object_id: {"contents": [{"id": "visible"}], "momentCount": 1}
     assert crawler.has_purple_panel("member-1", cert_ts=1) is True
 
