@@ -1,2 +1,24 @@
-# yundingtiangong
-Repository created by Copilot to host Anthropic OIDC workflow
+# TON MAN 2.0
+
+`topmen.app` 的单文件采集服务源代码仓库。该服务提供受口令保护的运行看板、全国非福建城市级遍历、SQLite 状态持久化、Telegram 运行播报和资料卡推送。
+
+## 仓库内容
+
+| 文件 | 用途 |
+|---|---|
+| `app.py` | 唯一应用程序：采集、看板、断点、自动循环、Telegram 推送与认证封面。 |
+| `cover_background.jpg` | 口令封面横幅。 |
+| `dashboard_background.jpg` | 已登录看板的 50% 透明度背景图。 |
+| `DEPLOYMENT.md` | 部署和更新约定。 |
+
+生产环境仍保持三文件运行目录：`app.py`、`.env` 与 `zhenai.db`。两张图片在部署时写入 `zhenai.db` 的 `site_assets` 表，因此运行目录中不额外保存图片文件。
+
+## 当前行为
+
+- 城市级遍历覆盖全部非福建城市，暂停时保留城市断点。
+- 完整正常遍历结束后，等待 30 分钟自动开启下一轮。
+- 手动暂停、登录过期、异常或无可执行城市时不会自动重启。
+- 看板使用单一浏览器视口，页面没有垂直滚动；运行日志在内部区域滚动。
+- 首页受口令保护；看板显示本次新增记录和累计入库。
+
+> **安全要求：** 不提交 `.env`、`zhenai.db`、访问口令、平台 Cookie、Telegram Token 或任何导出的生产数据。
