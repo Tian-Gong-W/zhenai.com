@@ -832,41 +832,19 @@ class ZhenaiCrawler:
             print(f"    获取 {object_id} 动态入口异常: {e}")
         return {}
 
-    @staticmethod
-    def _purple_window(cert_ts):
-        """紫图窗口 = 当前实时时间向前 3 天（now-3天 ~ now）。cert_ts 参数保留兼容。"""
-        now = time.time()
-        return now - 3 * 86400, now
-
     def has_purple_panel(self, object_id, cert_ts, moments=None):
         """
-        紫图可见（新标准）：
-        1) 实名认证在「当前实时时间向前 3 天」内
-        2) 动态窗口激活：最近 3 天内发布过一条动态，且排除 头像(type4)/独白(type5)/观点(type7)
+        紫图可见：资料页「动态」入口返回的 contents 非空。
+
+        `momentCount` 和动态列表中的认证卡、头像卡等都不是紫图可见的
+        可靠依据；以小程序同源的 getShowMomentsByWeChat 接口为准。
+        cert_ts 与 moments 参数保留，以兼容既有调用点。
         """
         if not cert_ts:
             return False
-        win_start, win_end = self._purple_window(cert_ts)  # now-3天 ~ now
-
-        # 条件1：实名认证在最近3天内
-        if not (win_start <= cert_ts / 1000 < win_end):
-            return False
-
-        # 条件2：最近3天内有动态，排除 type4/5/7
-        if moments is not None:
-            has_dynamic = False
-            for m in moments:
-                mom = m.get("moment") or {}
-                mtype = mom.get("type", -1)
-                mts = mom.get("createTime", 0) or 0
-                if mtype in (4, 5, 7):
-                    continue
-                if win_start <= mts / 1000 < win_end:
-                    has_dynamic = True
-                    break
-            if not has_dynamic:
-                return False
-        return True
+        show_data = self.get_show_moments(object_id)
+        contents = show_data.get("contents") if isinstance(show_data, dict) else None
+        return isinstance(contents, list) and len(contents) > 0
 
     def parse_moments_times(self, moments, object_id=None):
         """解析动态时间（最新、实名认证、最早）+ 紫图窗口是否真正激活动态入口"""
@@ -886,17 +864,8 @@ class ZhenaiCrawler:
                 break
 
         has_recent = False
-        if cert_ts > 0:
-            if object_id is not None:
-                has_recent = self.has_purple_panel(object_id, cert_ts, moments=moments)
-            else:
-                cert_start, cert_end = self._purple_window(cert_ts)
-                for m in moments:
-                    mtype = m.get("moment", {}).get("type", -1)
-                    mts = m.get("moment", {}).get("createTime", 0) or 0
-                    if mtype != 6 and cert_start <= mts / 1000 < cert_end:
-                        has_recent = True
-                        break
+        if cert_ts > 0 and object_id is not None:
+            has_recent = self.has_purple_panel(object_id, cert_ts, moments=moments)
 
         earliest = fmt(moments[-1].get("moment", {}).get("createTime")) if not cert else ""
         return latest, cert, earliest, has_recent
@@ -1909,6 +1878,9 @@ def push_new_candidates():
             else:
                 profile = card_crawler.get_member_profile(user["member_id"])
                 if profile:
+                    if not card_crawler.has_purple_panel(user["member_id"], cert_ts=1):
+                        emit(f"紫图复核未通过，跳过推送：{user['member_id']}")
+                        continue
                     descriptor, temporary_card = tempfile.mkstemp(prefix="zhenai_card_", suffix=".png")
                     os.close(descriptor)
                     render_profile_card(profile, temporary_card)
