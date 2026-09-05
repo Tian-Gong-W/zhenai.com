@@ -1267,7 +1267,11 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_SAMESITE="Strict",
 )
-log_queue = queue.Queue()
+LOG_HISTORY_LIMIT = 240
+SUBSCRIBER_QUEUE_LIMIT = 256
+log_history = []
+log_subscribers = set()
+log_broadcast_lock = threading.RLock()
 crawl_running = threading.Event()
 manual_stop_requested = threading.Event()
 start_lock = threading.Lock()
@@ -1279,7 +1283,31 @@ auto_restart_generation = 0
 
 
 def emit(message):
-    log_queue.put(str(message))
+    """Broadcast one log event to every connected dashboard view."""
+    message = str(message)
+    with log_broadcast_lock:
+        log_history.append(message)
+        del log_history[:-LOG_HISTORY_LIMIT]
+        for subscriber in tuple(log_subscribers):
+            try:
+                subscriber.put_nowait(message)
+            except queue.Full:
+                # Keep the newest state when a detached or slow browser falls behind.
+                try:
+                    subscriber.get_nowait()
+                    subscriber.put_nowait(message)
+                except queue.Empty:
+                    pass
+
+
+def clear_live_log_history():
+    with log_broadcast_lock:
+        log_history.clear()
+
+
+def get_live_log_history():
+    with log_broadcast_lock:
+        return list(log_history)
 
 
 class LogCapture(io.StringIO):
@@ -1349,11 +1377,7 @@ def _launch_crawl(auto_started=False):
     global crawl_thread
     if crawl_running.is_set():
         return False, "已有采集任务在运行"
-    while not log_queue.empty():
-        try:
-            log_queue.get_nowait()
-        except queue.Empty:
-            break
+    clear_live_log_history()
     provinces, age_begin, age_end, gender, max_pages, extra = _get_search_config()
     _get_today_start_total(_get_main_total())
     manual_stop_requested.clear()
@@ -1530,9 +1554,9 @@ def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra):
     finally:
         sys.stdout = old_stdout
         crawl_running.clear()
-        emit("__DONE__")
         if completed_normally and not manual_stop_requested.is_set():
             schedule_auto_restart()
+        emit("__DONE__")
 
 
 def tg_hourly_reporter():
@@ -1999,20 +2023,33 @@ def stop():
 @require_dashboard_access
 def stream():
     def generate():
-        if current_stats["total"] > 0:
-            yield f"event: stats\ndata: {json.dumps(current_stats, ensure_ascii=False)}\n\n"
-        while True:
-            try:
-                message = log_queue.get(timeout=1)
-                if message == "__DONE__":
-                    yield 'data: {"done": true}\n\n'
-                    break
+        subscriber = queue.Queue(maxsize=SUBSCRIBER_QUEUE_LIMIT)
+        with log_broadcast_lock:
+            log_subscribers.add(subscriber)
+            history = list(log_history)
+        try:
+            for message in history:
                 if message.startswith("__STATS__:"):
                     yield f"event: stats\ndata: {message[9:]}\n\n"
-                else:
+                elif message != "__DONE__":
                     yield f"data: {json.dumps({'msg': message}, ensure_ascii=False)}\n\n"
-            except queue.Empty:
-                yield 'data: {"ping": true}\n\n'
+            if current_stats["total"] > 0:
+                yield f"event: stats\ndata: {json.dumps(current_stats, ensure_ascii=False)}\n\n"
+            while True:
+                try:
+                    message = subscriber.get(timeout=1)
+                    if message == "__DONE__":
+                        yield 'data: {"done": true}\n\n'
+                        break
+                    if message.startswith("__STATS__:"):
+                        yield f"event: stats\ndata: {message[9:]}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'msg': message}, ensure_ascii=False)}\n\n"
+                except queue.Empty:
+                    yield 'data: {"ping": true}\n\n'
+        finally:
+            with log_broadcast_lock:
+                log_subscribers.discard(subscriber)
     return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
@@ -2327,9 +2364,12 @@ function connectStream() {
     }
   };
   eventSource.onerror = () => {
-    if (eventSource) {
-      closeStream();
-      setRunning(false);
+    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      fetch('/status').then(response => response.json()).then(status => {
+        setRunning(status.running);
+        if (status.running) setTimeout(connectStream, 1000);
+        else closeStream();
+      }).catch(() => {});
     }
   };
 }
