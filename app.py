@@ -828,9 +828,10 @@ class ZhenaiCrawler:
             resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
             if resp.status_code == 200:
                 return resp.json().get("data", {}) or {}
+            print(f"    获取 {object_id} 动态入口失败: HTTP {resp.status_code}")
         except Exception as e:
             print(f"    获取 {object_id} 动态入口异常: {e}")
-        return {}
+        return None
 
     def has_purple_panel(self, object_id, cert_ts, moments=None):
         """

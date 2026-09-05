@@ -30,5 +30,8 @@ with tempfile.TemporaryDirectory() as temp_dir:
     crawler.get_show_moments = lambda object_id: {"contents": [{"id": "visible"}], "momentCount": 1}
     assert crawler.has_purple_panel("member-1", cert_ts=1) is True
 
+    crawler.get_show_moments = lambda object_id: None
+    assert crawler.has_purple_panel("member-1", cert_ts=1) is False
+
 os.environ.pop("ZHENAI_BASE_DIR", None)
 print("PASS: purple visibility uses non-empty show-moments contents, not cards or momentCount")
