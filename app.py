@@ -68,6 +68,7 @@ DEFAULT_SEARCH_CONFIG = {
     "age_end": 65,
     "gender": "女",
     "max_pages": 100,
+    "minimum_income": 3000,
     "income_filter": "",
     "education_filter": "",
     "marriage_filter": "",
@@ -673,7 +674,8 @@ class ZhenaiCrawler:
 
     def search_members(self, page=1, page_size=20,
                        age_begin=-1, age_end=-1,
-                       work_city=-1, gender=1):
+                       work_city=-1, gender=1,
+                       salary_begin=-1, salary_end=-1):
         """
         通过条件搜索接口采集会员列表（需要登录态 token）。
 
@@ -683,6 +685,8 @@ class ZhenaiCrawler:
         :param age_end:    年龄上限，-1 表示不限
         :param work_city:  城市代码，-1 表示全国不限
         :param gender:     搜索对象性别：1=女，2=男
+        :param salary_begin: 月收入下限（元），-1 表示不限
+        :param salary_end:   月收入上限（元），-1 表示不限
         :return:           会员基础信息字典列表（含 memberID/objectID、昵称、城市等）
         """
         if not self.token:
@@ -697,8 +701,8 @@ class ZhenaiCrawler:
             "ageEnd":            age_end,
             "heightBegin":       129,
             "heightEnd":         -1,
-            "salaryBegin":       -1,
-            "salaryEnd":         -1,
+            "salaryBegin":       salary_begin,
+            "salaryEnd":         salary_end,
             "multiEducation":    "",
             "multiWorkCity":     work_city,
             "multiMarriage":     -1,
@@ -871,9 +875,23 @@ FIELDNAMES = ["ID", "昵称", "性别", "年龄", "居住地", "月收入", "学
               "标签", "独白", "头像链接",
               "最新动态时间", "实名认证时间", "最早动态时间", "VIP", "紫图可见"]
 
+
+def income_meets_minimum(income_text, minimum_income):
+    """Return whether a visible salary band can meet the configured monthly minimum."""
+    if not minimum_income:
+        return True
+    text = str(income_text or "").replace(",", "").replace("，", "")
+    values = [int(value) for value in re.findall(r"\d+", text)]
+    if not values:
+        return False
+    if "以下" in text:
+        return False
+    return max(values) >= minimum_income
+
+
 def process_member(crawler, mid, scraped_ids, cache_file,
                    output_file, gender_filter, city_filter, extra_filters=None,
-                   cert_days=0):
+                   cert_days=0, minimum_income=0):
     """
     处理单个会员 ID。
     cert_days>0: 先查动态 → 实名不在N天内直接跳过（省1次详情API）
@@ -908,6 +926,10 @@ def process_member(crawler, mid, scraped_ids, cache_file,
 
     if not parsed:
         print(f"    解析会员 {mid} 失败或返回空")
+        return False
+
+    if not income_meets_minimum(parsed.get("月收入", ""), minimum_income):
+        print(f"    跳过: {parsed['昵称']} (月收入: {parsed.get('月收入')}，低于{minimum_income}元)")
         return False
 
     # 城市过滤
@@ -1316,6 +1338,7 @@ def _get_search_config():
         (
             DEFAULT_SEARCH_CONFIG["income_filter"], DEFAULT_SEARCH_CONFIG["education_filter"],
             DEFAULT_SEARCH_CONFIG["marriage_filter"], DEFAULT_SEARCH_CONFIG["cert_days"],
+            DEFAULT_SEARCH_CONFIG["minimum_income"],
         ),
     )
 
@@ -1349,6 +1372,7 @@ def _launch_crawl(auto_started=False):
     else:
         emit(f"开始搜索采集 | 全国 | {gender} | {age_begin}-{age_end} 岁 | 最多 {max_pages} 页")
     emit(f"固定规则：近 {extra[3] * 24} 小时实名认证与紫图用户")
+    emit(f"收入规则：月收入 {extra[4]} 元以上")
     crawl_thread = threading.Thread(
         target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra), daemon=True,
     )
@@ -1409,7 +1433,7 @@ def resume_auto_restart_if_pending():
         schedule_auto_restart(0, restoring=True)
 
 
-def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0)):
+def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0, 0)):
     crawler = ZhenaiCrawler(token=MY_TOKEN, seedtoken=MY_SEED)
     scraped = load_scraped_ids()
     gender_value = 1 if gender == "女" else 2
@@ -1463,7 +1487,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                 break
             members, has_next = crawler.search_members(
                 page=page, page_size=20, age_begin=age_begin, age_end=age_end,
-                work_city=city_code, gender=gender_value,
+                work_city=city_code, gender=gender_value, salary_begin=extra[4],
             )
             if crawler.last_search_error_code == "-00004":
                 emit("❌ 登录状态已过期，已停止采集；请更新 MY_TOKEN 后再启动。")
@@ -1479,7 +1503,10 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
             for member_id in ids:
                 if str(member_id) in scraped or not crawl_running.is_set():
                     continue
-                if process_member(crawler, member_id, scraped, DB_PATH, DB_PATH, None, None, extra[:3], extra[3]):
+                if process_member(
+                    crawler, member_id, scraped, DB_PATH, DB_PATH, None, None,
+                    extra[:3], extra[3], minimum_income=extra[4],
+                ):
                     city_new += 1
                     total_new += 1
                 time.sleep(0.3)
