@@ -1776,8 +1776,25 @@ def card_caption(user):
     ))
 
 
+def telegram_response_ok(response, method):
+    """Return Telegram success and retain a redacted, actionable failure message in the dashboard log."""
+    if response.ok:
+        return True
+    description = ""
+    try:
+        description = str(response.json().get("description", ""))
+    except (ValueError, AttributeError):
+        pass
+    emit(f"Telegram {method} 发送失败：HTTP {response.status_code}{' · ' + description if description else ''}")
+    return False
+
+
 def send_text(caption):
-    return requests.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage", json={"chat_id": GROUP_CHAT_ID, "text": caption}, timeout=20).ok
+    response = requests.post(
+        f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
+        json={"chat_id": GROUP_CHAT_ID, "text": caption}, timeout=20,
+    )
+    return telegram_response_ok(response, "sendMessage")
 
 
 def send_card(card_path, caption):
@@ -1787,7 +1804,7 @@ def send_card(card_path, caption):
             data={"chat_id": GROUP_CHAT_ID, "caption": caption},
             files={"photo": (Path(card_path).name, card_file, "image/png")}, timeout=45,
         )
-    return response.ok
+    return telegram_response_ok(response, "sendPhoto")
 
 
 def get_avatar_url(profile, user):
@@ -1848,7 +1865,7 @@ def send_profile_album(avatar_path, card_path, caption):
             },
             timeout=60,
         )
-    return response.ok
+    return telegram_response_ok(response, "sendMediaGroup")
 
 
 def push_new_candidates():
