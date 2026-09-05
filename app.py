@@ -1845,7 +1845,11 @@ def download_avatar(avatar_url):
     """Download and validate a public profile avatar as a temporary Telegram photo."""
     if not avatar_url:
         return None
-    response = requests.get(avatar_url, timeout=20)
+    try:
+        response = requests.get(avatar_url, timeout=(5, 12))
+    except requests.RequestException as error:
+        emit(f"头像下载超时或失败，已改为只推资料卡：{type(error).__name__}")
+        return None
     if not response.ok or len(response.content) == 0 or len(response.content) > 8 * 1024 * 1024:
         return None
     descriptor, avatar_path = tempfile.mkstemp(prefix="zhenai_avatar_", suffix=".jpg")
