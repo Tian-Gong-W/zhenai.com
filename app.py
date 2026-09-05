@@ -813,39 +813,26 @@ class ZhenaiCrawler:
             time.sleep(0.2)
         return moments
 
-    def get_show_moments(self, object_id):
+    def has_purple_panel(self, cert_ts, moments, now=None):
         """
-        资料卡「动态」入口同源接口。
-        小程序展示条件：contents 过滤后 length>0（仅 momentCount 不够）。
-        """
-        req_ua = self.generate_ua()
-        url = "https://api.zhenai.com/moment/getShowMomentsByWeChat.do"
-        params = {
-            "objectID": object_id, "limit": 15, "wxApp": 1,
-            "_method": "GET", "ua": req_ua,
-        }
-        try:
-            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
-            if resp.status_code == 200:
-                return resp.json().get("data", {}) or {}
-            print(f"    获取 {object_id} 动态入口失败: HTTP {resp.status_code}")
-        except Exception as e:
-            print(f"    获取 {object_id} 动态入口异常: {e}")
-        return None
+        紫图可见：实名认证后的实时 48 小时内，存在 type 0 或 type 1 日常动态。
 
-    def has_purple_panel(self, object_id, cert_ts, moments=None):
+        认证时间本身必须处于当前时刻向前 48 小时内。认证前的历史动态，
+        以及 type 2/4/5/6/7/8/12 等非日常动态，一律不计入紫图判定。
         """
-        紫图可见：资料页「动态」入口返回的 contents 非空。
-
-        `momentCount` 和动态列表中的认证卡、头像卡等都不是紫图可见的
-        可靠依据；以小程序同源的 getShowMomentsByWeChat 接口为准。
-        cert_ts 与 moments 参数保留，以兼容既有调用点。
-        """
-        if not cert_ts:
+        if not cert_ts or not moments:
             return False
-        show_data = self.get_show_moments(object_id)
-        contents = show_data.get("contents") if isinstance(show_data, dict) else None
-        return isinstance(contents, list) and len(contents) > 0
+        reference_now = time.time() if now is None else float(now)
+        certification_seconds = float(cert_ts) / 1000
+        if not reference_now - CERTIFICATION_WINDOW_HOURS * 3600 <= certification_seconds <= reference_now:
+            return False
+        for item in moments:
+            moment = item.get("moment") or {}
+            moment_type = moment.get("type", -1)
+            moment_timestamp = moment.get("createTime") or 0
+            if moment_type in (0, 1) and certification_seconds <= moment_timestamp / 1000 <= reference_now:
+                return True
+        return False
 
     def parse_moments_times(self, moments, object_id=None, check_purple=True):
         """解析动态时间（最新、实名认证、最早）+ 紫图窗口是否真正激活动态入口"""
@@ -860,13 +847,15 @@ class ZhenaiCrawler:
         cert_ts = 0
         for m in moments:
             if m.get("text") == "已完成人脸认证" or m.get("moment", {}).get("type") == 6:
-                cert = fmt(m.get("moment", {}).get("createTime"))
-                cert_ts = m.get("moment", {}).get("createTime", 0)
-                break
+                timestamp = m.get("moment", {}).get("createTime", 0) or 0
+                if timestamp > cert_ts:
+                    cert_ts = timestamp
+        if cert_ts:
+            cert = fmt(cert_ts)
 
         has_recent = False
-        if check_purple and cert_ts > 0 and object_id is not None:
-            has_recent = self.has_purple_panel(object_id, cert_ts, moments=moments)
+        if check_purple and cert_ts > 0:
+            has_recent = self.has_purple_panel(cert_ts, moments=moments)
 
         earliest = fmt(moments[-1].get("moment", {}).get("createTime")) if not cert else ""
         return latest, cert, earliest, has_recent
@@ -1879,7 +1868,14 @@ def push_new_candidates():
             else:
                 profile = card_crawler.get_member_profile(user["member_id"])
                 if profile:
-                    if not card_crawler.has_purple_panel(user["member_id"], cert_ts=1):
+                    moments = card_crawler.get_moments(user["member_id"])
+                    _, fresh_certification, _, fresh_purple = card_crawler.parse_moments_times(moments)
+                    if not certification_within_window(fresh_certification) or not fresh_purple:
+                        with DB_LOCK, db_connect() as connection:
+                            connection.execute(
+                                "UPDATE members SET purple_visible = '否' WHERE member_id = ?",
+                                (user["member_id"],),
+                            )
                         emit(f"紫图复核未通过，跳过推送：{user['member_id']}")
                         continue
                     descriptor, temporary_card = tempfile.mkstemp(prefix="zhenai_card_", suffix=".png")
