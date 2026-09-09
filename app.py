@@ -1347,6 +1347,7 @@ def _get_search_config():
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
 PUSH_WINDOW_OPTIONS = (24, 48)
+MIN_SELECTED_PROVINCES = 15
 
 
 def selectable_provinces():
@@ -1399,11 +1400,11 @@ def validate_run_filter_config(payload):
     provinces = payload.get("provinces")
     if not isinstance(provinces, list):
         raise ValueError("请选择至少一个省份")
-    provinces = [str(province) for province in provinces]
+    provinces = list(dict.fromkeys(str(province) for province in provinces))
     if any(province not in available for province in provinces):
         raise ValueError("省份选项无效")
-    if not provinces:
-        raise ValueError("请选择至少一个省份")
+    if len(provinces) < MIN_SELECTED_PROVINCES:
+        raise ValueError(f"请至少选择 {MIN_SELECTED_PROVINCES} 个省份")
     try:
         minimum_income = int(payload.get("minimum_income"))
     except (TypeError, ValueError):
@@ -2355,10 +2356,12 @@ body {
 .summary-detail { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
 	.stat-card { min-height: 48px; padding: 7px 10px; border: 1px solid rgba(217, 226, 236, .86); border-radius: 9px; background: rgba(255,255,255,.54); }
 .stat-card.total .summary-value { color: #a16207; }
-.stats-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 68vw; }
-.province-block { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; font-size: 12px; }
+.stats-list { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 7px; min-width: 0; max-width: 68vw; max-height: 50px; overflow-x: auto; overflow-y: hidden; padding: 1px 2px 4px; scrollbar-width: thin; scrollbar-color: rgba(15,118,110,.55) transparent; }
+.stats-list::-webkit-scrollbar { height: 5px; }
+.stats-list::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(15,118,110,.55); }
+.province-block { flex: 0 0 auto; max-width: 220px; min-height: 43px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; font-size: 12px; }
 	.province-block .pname { color: var(--ink); font-weight: 700; }
-	.province-block .ccount { color: var(--muted); }
+	.province-block .ccount { max-width: 200px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 	.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(217, 226, 236, .96); border-radius: 12px; background: rgba(255,255,255,.88); backdrop-filter: blur(4px); box-shadow: 0 10px 24px rgba(15,35,58,.07); }
 	.config-group { min-width: 0; }
 	.config-heading { margin: 0 0 7px; color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
@@ -2404,8 +2407,7 @@ body {
   .header h1 { font-size: 21px; }
 	  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
 	  .summary { grid-template-columns: 1fr 1fr; }
-  .stats-list { grid-column: 1 / -1; justify-content: flex-start; }
-  .stats-list { justify-content: flex-start; max-width: none; }
+	  .stats-list { grid-column: 1 / -1; justify-content: flex-start; max-width: none; max-height: 45px; }
 	  .log-panel { height: auto; }
 	  .config-panel { grid-template-columns: 1fr; gap: 8px; padding: 9px; }
 	  .config-side { grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; border-left: 0; }
@@ -2483,7 +2485,10 @@ function selectedProvinces() {
 function updateProvinceSummary() {
   const selected = selectedProvinces().length;
   const total = document.querySelectorAll('#provinceOptions input').length;
-  document.getElementById('provinceSummary').textContent = selected + ' / ' + total + ' 个省份';
+  const valid = selected >= 15;
+  document.getElementById('provinceSummary').textContent = selected + ' / ' + total + ' 个省份 · 至少 15 个';
+  document.getElementById('provinceSummary').style.color = valid ? '' : '#b42318';
+  document.getElementById('btnStart').disabled = currentRunning || !configLoaded || !valid;
 }
 
 function selectedRadioValue(containerId) {
@@ -2575,7 +2580,7 @@ function log(message) {
 
 function setRunning(running) {
   currentRunning = running;
-  document.getElementById('btnStart').disabled = running || !configLoaded;
+  document.getElementById('btnStart').disabled = running || !configLoaded || selectedProvinces().length < 15;
   document.getElementById('btnStop').disabled = !running;
   document.querySelectorAll('#runConfig input, #runConfig button').forEach(element => { element.disabled = running; });
   const status = document.getElementById('status');
@@ -2621,8 +2626,8 @@ async function startCrawl() {
     minimum_income: selectedRadioValue('incomeOptions'),
     push_window_hours: selectedRadioValue('pushWindowOptions'),
   };
-  if (!config.provinces.length) {
-    log('无法启动：请至少选择一个省份。');
+  if (config.provinces.length < 15) {
+    log('无法启动：请至少选择 15 个省份。');
     return;
   }
   try {

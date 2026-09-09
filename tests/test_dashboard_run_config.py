@@ -10,6 +10,11 @@ import tempfile
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[1] / "app.py"
+SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
+
+assert ".stats-list { display: flex; flex-wrap: nowrap;" in SOURCE_TEXT
+assert "max-height: 50px; overflow-x: auto; overflow-y: hidden;" in SOURCE_TEXT
+assert "请至少选择 15 个省份" in SOURCE_TEXT
 
 with tempfile.TemporaryDirectory() as temp_dir:
     os.environ["ZHENAI_BASE_DIR"] = temp_dir
@@ -23,19 +28,22 @@ with tempfile.TemporaryDirectory() as temp_dir:
     assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - 1
     assert service.default_run_filter_config()["minimum_income"] == 3000
     assert service.default_run_filter_config()["push_window_hours"] == 48
+    assert service.MIN_SELECTED_PROVINCES == 15
 
+    selected_provinces = service.selectable_provinces()[:15]
     config = service.validate_run_filter_config({
-        "provinces": ["广东", "北京"],
+        "provinces": list(reversed(selected_provinces)),
         "minimum_income": 8000,
         "push_window_hours": 24,
     })
-    assert config == {"provinces": ["北京", "广东"], "minimum_income": 8000, "push_window_hours": 24}
+    assert config == {"provinces": selected_provinces, "minimum_income": 8000, "push_window_hours": 24}
     service.save_run_filter_config(config)
     assert service.get_run_filter_config() == config
 
     for invalid in (
         {"provinces": [], "minimum_income": 3000, "push_window_hours": 48},
         {"provinces": ["福建"], "minimum_income": 3000, "push_window_hours": 48},
+        {"provinces": service.selectable_provinces()[:14], "minimum_income": 3000, "push_window_hours": 48},
         {"provinces": ["北京"], "minimum_income": 4000, "push_window_hours": 48},
         {"provinces": ["北京"], "minimum_income": 3000, "push_window_hours": 36},
     ):
@@ -72,11 +80,11 @@ with tempfile.TemporaryDirectory() as temp_dir:
         assert result["push_window_options"] == [24, 48]
 
         response = client.post("/start", json={
-            "provinces": ["上海"], "minimum_income": 12000, "push_window_hours": 24,
+            "provinces": selected_provinces, "minimum_income": 12000, "push_window_hours": 24,
         })
         assert response.status_code == 200 and response.get_json()["ok"] is True
         assert service.get_run_filter_config() == {
-            "provinces": ["上海"], "minimum_income": 12000, "push_window_hours": 24,
+            "provinces": selected_provinces, "minimum_income": 12000, "push_window_hours": 24,
         }
 
 os.environ.pop("ZHENAI_BASE_DIR", None)
