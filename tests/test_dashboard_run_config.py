@@ -16,7 +16,9 @@ assert "本次新增记录" not in SOURCE_TEXT
 assert "累计入库" not in SOURCE_TEXT
 assert 'grid-template-rows: min-content minmax(0, 1fr) auto;' in SOURCE_TEXT
 assert 'background: rgba(237,233,254,.88);' in SOURCE_TEXT
-assert "center / 100% 100% no-repeat" in SOURCE_TEXT
+assert ".dashboard::after" in SOURCE_TEXT
+assert "center / cover no-repeat" in SOURCE_TEXT
+assert "center / contain no-repeat" in SOURCE_TEXT
 assert '<span class="log-heading">运行日志</span>' in SOURCE_TEXT
 assert 'min-width: 112px; min-height: 38px;' in SOURCE_TEXT
 assert "请至少选择 15 个省份" in SOURCE_TEXT

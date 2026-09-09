@@ -2333,10 +2333,21 @@ body {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  opacity: .24;
+  transform: scale(1.035);
+  background: #eee7dc url('/dashboard-background.jpg') center / cover no-repeat;
+  filter: blur(10px) saturate(.85);
+}
+.dashboard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   opacity: .5;
-  background: url('/dashboard-background.jpg') center / 100% 100% no-repeat;
+  background: url('/dashboard-background.jpg') center / contain no-repeat;
 }
 .dashboard > * { position: relative; z-index: 1; }
 		.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(167,139,250,.54); border-radius: 12px; background: rgba(237,233,254,.88); backdrop-filter: blur(6px); box-shadow: 0 10px 24px rgba(76,29,149,.12); }
