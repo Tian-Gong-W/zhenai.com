@@ -12,8 +12,10 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[1] / "app.py"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 
-assert ".stats-list { display: flex; flex-wrap: nowrap;" in SOURCE_TEXT
-assert "max-height: 50px; overflow-x: auto; overflow-y: hidden;" in SOURCE_TEXT
+assert "本次新增记录" not in SOURCE_TEXT
+assert "累计入库" not in SOURCE_TEXT
+assert 'grid-template-rows: min-content minmax(0, 1fr) auto;' in SOURCE_TEXT
+assert 'background: rgba(237,233,254,.88);' in SOURCE_TEXT
 assert "请至少选择 15 个省份" in SOURCE_TEXT
 
 with tempfile.TemporaryDirectory() as temp_dir:

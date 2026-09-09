@@ -2326,7 +2326,7 @@ body {
 	  overflow: hidden;
 	  padding: clamp(14px, 2vw, 28px) clamp(24px, 4vw, 64px);
 	  display: grid;
-	  grid-template-rows: min-content min-content minmax(0, 1fr) auto;
+	  grid-template-rows: min-content minmax(0, 1fr) auto;
 	  gap: 12px;
 }
 .dashboard::before {
@@ -2339,46 +2339,23 @@ body {
   background: url('/dashboard-background.jpg') center / contain no-repeat;
 }
 .dashboard > * { position: relative; z-index: 1; }
-	.summary {
-	  display: grid;
-	  grid-template-columns: minmax(120px, .72fr) minmax(120px, .72fr) minmax(0, 1.56fr);
-	  gap: 12px;
-	  align-items: center;
-	  min-height: 66px;
-	  padding: 8px 10px;
-  background: rgba(255,255,255,.84);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  backdrop-filter: blur(3px);
-}
-.summary-label { margin: 0 0 2px; color: var(--muted); font-size: 12px; letter-spacing: .06em; }
-.summary-value { margin: 0; font-size: clamp(27px, 3vw, 38px); line-height: 1; font-weight: 750; color: var(--primary); }
-.summary-detail { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
-	.stat-card { min-height: 48px; padding: 7px 10px; border: 1px solid rgba(217, 226, 236, .86); border-radius: 9px; background: rgba(255,255,255,.54); }
-.stat-card.total .summary-value { color: #a16207; }
-.stats-list { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 7px; min-width: 0; max-width: 68vw; max-height: 50px; overflow-x: auto; overflow-y: hidden; padding: 1px 2px 4px; scrollbar-width: thin; scrollbar-color: rgba(15,118,110,.55) transparent; }
-.stats-list::-webkit-scrollbar { height: 5px; }
-.stats-list::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(15,118,110,.55); }
-.province-block { flex: 0 0 auto; max-width: 220px; min-height: 43px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; font-size: 12px; }
-	.province-block .pname { color: var(--ink); font-weight: 700; }
-	.province-block .ccount { max-width: 200px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
-	.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(217, 226, 236, .96); border-radius: 12px; background: rgba(255,255,255,.88); backdrop-filter: blur(4px); box-shadow: 0 10px 24px rgba(15,35,58,.07); }
+		.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(167,139,250,.54); border-radius: 12px; background: rgba(237,233,254,.88); backdrop-filter: blur(6px); box-shadow: 0 10px 24px rgba(76,29,149,.12); }
 	.config-group { min-width: 0; }
 	.config-heading { margin: 0 0 7px; color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
 	.config-meta { margin-left: 7px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: normal; }
 	.province-tools { display: flex; align-items: center; gap: 6px; margin: 0 0 7px; }
-	.tiny-btn { min-height: 25px; padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 6px; color: #334155; background: #f8fafc; font-size: 11px; font-weight: 700; cursor: pointer; }
-	.tiny-btn:hover:not(:disabled) { border-color: #0f766e; color: #0f766e; }
+		.tiny-btn { min-height: 25px; padding: 3px 8px; border: 1px solid #c4b5fd; border-radius: 6px; color: #4c1d95; background: rgba(221,214,254,.58); font-size: 11px; font-weight: 700; cursor: pointer; }
+		.tiny-btn:hover:not(:disabled) { border-color: #7c3aed; color: #5b21b6; background: rgba(196,181,253,.72); }
 	.selection-summary { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
 	.province-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 5px; max-height: 92px; padding-right: 4px; overflow-y: auto; }
 	.province-option, .choice-option { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: #334155; font-size: 12px; line-height: 1.2; cursor: pointer; }
-	.province-option { min-height: 22px; padding: 3px 5px; border: 1px solid #e2e8f0; border-radius: 6px; background: rgba(248,250,252,.84); }
-	.province-option:has(input:checked) { color: #075f59; border-color: rgba(13,148,136,.45); background: rgba(204,251,241,.55); }
-	.config-side { display: grid; grid-template-columns: 1fr; align-content: center; gap: 11px; padding-left: 11px; border-left: 1px solid #e2e8f0; }
+		.province-option { min-height: 22px; padding: 3px 5px; border: 1px solid rgba(196,181,253,.75); border-radius: 6px; background: rgba(237,233,254,.76); }
+		.province-option:has(input:checked) { color: #4c1d95; border-color: rgba(124,58,237,.6); background: rgba(221,214,254,.8); }
+		.config-side { display: grid; grid-template-columns: 1fr; align-content: center; gap: 11px; padding-left: 11px; border-left: 1px solid rgba(167,139,250,.4); }
 	.choice-row { display: flex; flex-wrap: wrap; gap: 7px; }
-	.choice-option { min-height: 28px; padding: 5px 8px; border: 1px solid #dbe3ec; border-radius: 7px; background: rgba(248,250,252,.72); }
-	.choice-option:has(input:checked) { color: #075f59; border-color: rgba(13,148,136,.55); background: rgba(204,251,241,.62); font-weight: 700; }
-	.config-panel input { accent-color: var(--primary); }
+		.choice-option { min-height: 28px; padding: 5px 8px; border: 1px solid rgba(196,181,253,.86); border-radius: 7px; background: rgba(237,233,254,.82); }
+		.choice-option:has(input:checked) { color: #4c1d95; border-color: rgba(124,58,237,.68); background: rgba(221,214,254,.86); font-weight: 700; }
+		.config-panel input { accent-color: #7c3aed; }
 	.config-panel input:disabled, .config-panel label:has(input:disabled), .config-panel button:disabled { cursor: not-allowed; opacity: .52; }
 	.log-panel {
   min-height: 0;
@@ -2403,12 +2380,10 @@ body {
 .btn-stop { background: var(--danger); }
 .btn-stop:hover:not(:disabled) { background: var(--danger-hover); }
 	@media (max-width: 720px) {
-  .header { height: 62px; min-height: 62px; padding: 10px 18px; }
-  .header h1 { font-size: 21px; }
-	  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
-	  .summary { grid-template-columns: 1fr 1fr; }
-	  .stats-list { grid-column: 1 / -1; justify-content: flex-start; max-width: none; max-height: 45px; }
-	  .log-panel { height: auto; }
+	  .header { height: 62px; min-height: 62px; padding: 10px 18px; }
+	  .header h1 { font-size: 21px; }
+		  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
+		  .log-panel { height: auto; }
 	  .config-panel { grid-template-columns: 1fr; gap: 8px; padding: 9px; }
 	  .config-side { grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; border-left: 0; }
 	  .province-list { grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); max-height: 62px; }
@@ -2428,18 +2403,6 @@ body {
 </header>
 
 <main class="dashboard">
-  <section class="summary" aria-live="polite">
-    <div class="stat-card">
-      <p class="summary-label">本次新增记录</p>
-      <p class="summary-value" id="statsTotal">0</p>
-    </div>
-    <div class="stat-card total">
-      <p class="summary-label">累计入库</p>
-      <p class="summary-value" id="statsAllTotal">0</p>
-    </div>
-    <div class="stats-list" id="statsByProvince"></div>
-	  </section>
-
 	  <section class="config-panel" id="runConfig" aria-label="启动前采集配置">
 	    <div class="config-group">
 	      <p class="config-heading">采集省份 <span class="config-meta">福建已排除</span></p>
@@ -2548,27 +2511,6 @@ document.getElementById('clearProvinces').addEventListener('click', () => {
   updateProvinceSummary();
 });
 
-function renderStats(stats) {
-  document.getElementById('statsTotal').textContent = stats.total || 0;
-  if (Object.prototype.hasOwnProperty.call(stats, 'all_total')) {
-    document.getElementById('statsAllTotal').textContent = stats.all_total || 0;
-  }
-  const container = document.getElementById('statsByProvince');
-  container.replaceChildren();
-  for (const [province, cities] of Object.entries(stats.by_province || {})) {
-    const block = document.createElement('div');
-    block.className = 'province-block';
-    const title = document.createElement('div');
-    title.className = 'pname';
-    title.textContent = province;
-    const detail = document.createElement('div');
-    detail.className = 'ccount';
-    detail.textContent = Object.entries(cities).map(([city, count]) => city + ': ' + count).join('  ');
-    block.append(title, detail);
-    container.appendChild(block);
-  }
-}
-
 function log(message) {
   const line = document.createElement('div');
   line.className = 'line';
@@ -2598,7 +2540,6 @@ function closeStream() {
 function connectStream() {
   closeStream();
   eventSource = new EventSource('/stream');
-  eventSource.addEventListener('stats', event => renderStats(JSON.parse(event.data)));
   eventSource.onmessage = event => {
     const data = JSON.parse(event.data);
     if (data.done) {
@@ -2642,7 +2583,6 @@ async function startCrawl() {
       return;
     }
     document.getElementById('log').replaceChildren();
-    renderStats({ total: 0, by_province: {} });
     setRunning(true);
     log('已发送启动请求');
     connectStream();
@@ -2661,7 +2601,6 @@ async function stopCrawl() {
   }
 }
 
-fetch('/api/stats').then(response => response.json()).then(renderStats);
 fetch('/api/run-config').then(response => {
   if (!response.ok) throw new Error('无法读取启动配置');
   return response.json();
