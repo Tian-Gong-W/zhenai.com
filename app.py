@@ -2336,7 +2336,7 @@ body {
   z-index: -1;
   pointer-events: none;
   opacity: .5;
-  background: url('/dashboard-background.jpg') center / contain no-repeat;
+  background: url('/dashboard-background.jpg') center / 100% 100% no-repeat;
 }
 .dashboard > * { position: relative; z-index: 1; }
 		.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(167,139,250,.54); border-radius: 12px; background: rgba(237,233,254,.88); backdrop-filter: blur(6px); box-shadow: 0 10px 24px rgba(76,29,149,.12); }
@@ -2357,7 +2357,7 @@ body {
 		.choice-option:has(input:checked) { color: #4c1d95; border-color: rgba(124,58,237,.68); background: rgba(221,214,254,.86); font-weight: 700; }
 		.config-panel input { accent-color: #7c3aed; }
 	.config-panel input:disabled, .config-panel label:has(input:disabled), .config-panel button:disabled { cursor: not-allowed; opacity: .52; }
-	.log-panel {
+.log-panel {
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2367,11 +2367,12 @@ body {
   border-radius: 14px;
   box-shadow: 0 16px 38px rgba(15, 35, 58, .12);
 }
-.log-title { padding: 14px 18px; color: #9eb5ca; border-bottom: 1px solid #263849; font-size: 13px; letter-spacing: .08em; }
-.log-area { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; color: var(--terminal-text); font-family: "SFMono-Regular", Consolas, monospace; font-size: 14px; line-height: 1.7; }
+.log-title { min-height: 58px; padding: 9px 13px 9px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #9eb5ca; border-bottom: 1px solid #263849; font-size: 13px; letter-spacing: .08em; }
+.log-heading { flex: 1 1 auto; min-width: 0; }
+.log-area { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; color: var(--terminal-text); font-family: "SFMono-Regular", Consolas, monospace; font-size: 14px; line-height: 1.7; }
 .log-area .line { white-space: pre-wrap; word-break: break-word; }
-.actions { display: flex; align-items: center; gap: 12px; }
-.btn { min-width: 148px; min-height: 50px; padding: 12px 22px; border: 0; border-radius: 9px; color: #fff; cursor: pointer; font-size: 16px; font-weight: 700; transition: transform .15s ease, background .15s ease, opacity .15s ease; }
+.actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.btn { min-width: 112px; min-height: 38px; padding: 8px 14px; border: 1px solid transparent; border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px; font-weight: 800; letter-spacing: .04em; transition: transform .15s ease, background .15s ease, opacity .15s ease; }
 .btn:hover:not(:disabled) { transform: translateY(-1px); }
 .btn:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }
 .btn:disabled { cursor: not-allowed; opacity: .45; }
@@ -2383,14 +2384,15 @@ body {
 	  .header { height: 62px; min-height: 62px; padding: 10px 18px; }
 	  .header h1 { font-size: 21px; }
 		  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
-		  .log-panel { height: auto; }
+	  .log-panel { height: auto; }
+	  .log-title { min-height: 50px; padding: 7px 9px 7px 13px; gap: 8px; }
 	  .config-panel { grid-template-columns: 1fr; gap: 8px; padding: 9px; }
 	  .config-side { grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; border-left: 0; }
 	  .province-list { grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); max-height: 62px; }
 	  .choice-row { gap: 5px; }
 	  .choice-option { padding: 4px 6px; font-size: 11px; }
-  .actions { display: grid; grid-template-columns: 1fr 1fr; }
-  .btn { min-width: 0; min-height: 44px; width: 100%; }
+	  .actions { display: flex; gap: 6px; }
+	  .btn { min-width: 82px; min-height: 34px; padding: 7px 9px; font-size: 12px; }
 }
 </style>
 </head>
@@ -2426,14 +2428,15 @@ body {
 	  </section>
 
 	  <section class="log-panel" aria-label="采集运行日志">
-    <div class="log-title">运行日志</div>
+	    <div class="log-title">
+	      <span class="log-heading">运行日志</span>
+	      <div class="actions" aria-label="采集控制">
+	        <button class="btn btn-start" id="btnStart" type="button" onclick="startCrawl()">启动采集</button>
+	        <button class="btn btn-stop" id="btnStop" type="button" onclick="stopCrawl()" disabled>暂停采集</button>
+	      </div>
+	    </div>
     <div class="log-area" id="log"><div class="line">等待启动采集任务…</div></div>
   </section>
-
-  <div class="actions" aria-label="采集控制">
-    <button class="btn btn-start" id="btnStart" type="button" onclick="startCrawl()">启动采集</button>
-    <button class="btn btn-stop" id="btnStop" type="button" onclick="stopCrawl()" disabled>暂停采集</button>
-  </div>
 </main>
 
 <script>
