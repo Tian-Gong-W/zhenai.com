@@ -69,6 +69,7 @@ DEFAULT_SEARCH_CONFIG = {
     "gender": "女",
     "max_pages": 100,
     "minimum_income": 3000,
+    "push_window_hours": 48,
     "income_filter": "",
     "education_filter": "",
     "marriage_filter": "",
@@ -1329,8 +1330,9 @@ def send_start_report(age_begin, age_end, gender, cert_days):
 
 
 def _get_search_config():
+    filters = get_run_filter_config()
     return (
-        list(DEFAULT_SEARCH_CONFIG["provinces"]),
+        list(filters["provinces"]),
         DEFAULT_SEARCH_CONFIG["age_begin"],
         DEFAULT_SEARCH_CONFIG["age_end"],
         DEFAULT_SEARCH_CONFIG["gender"],
@@ -1338,9 +1340,89 @@ def _get_search_config():
         (
             DEFAULT_SEARCH_CONFIG["income_filter"], DEFAULT_SEARCH_CONFIG["education_filter"],
             DEFAULT_SEARCH_CONFIG["marriage_filter"], DEFAULT_SEARCH_CONFIG["cert_days"],
-            DEFAULT_SEARCH_CONFIG["minimum_income"],
+            filters["minimum_income"], filters["push_window_hours"],
         ),
     )
+
+
+INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
+PUSH_WINDOW_OPTIONS = (24, 48)
+
+
+def selectable_provinces():
+    """Return all available provinces in a stable display order, excluding Fujian."""
+    return sorted(province for province in PROVINCE_MAP if province not in EXCLUDED_PROVINCES)
+
+
+def default_run_filter_config():
+    return {
+        "provinces": selectable_provinces(),
+        "minimum_income": DEFAULT_SEARCH_CONFIG["minimum_income"],
+        "push_window_hours": DEFAULT_SEARCH_CONFIG["push_window_hours"],
+    }
+
+
+def get_run_filter_config():
+    """Load the pending run controls, repairing obsolete or invalid saved choices."""
+    defaults = default_run_filter_config()
+    try:
+        saved = json.loads(get_state("run_filter_config", ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        saved = {}
+    selected_provinces = saved.get("provinces") if isinstance(saved, dict) else None
+    valid_provinces = set(selectable_provinces())
+    provinces = [province for province in selected_provinces or defaults["provinces"] if province in valid_provinces]
+    if not provinces:
+        provinces = defaults["provinces"]
+    minimum_income = saved.get("minimum_income", defaults["minimum_income"]) if isinstance(saved, dict) else defaults["minimum_income"]
+    push_window_hours = saved.get("push_window_hours", defaults["push_window_hours"]) if isinstance(saved, dict) else defaults["push_window_hours"]
+    try:
+        minimum_income = int(minimum_income)
+    except (TypeError, ValueError):
+        minimum_income = defaults["minimum_income"]
+    try:
+        push_window_hours = int(push_window_hours)
+    except (TypeError, ValueError):
+        push_window_hours = defaults["push_window_hours"]
+    return {
+        "provinces": provinces,
+        "minimum_income": minimum_income if minimum_income in INCOME_OPTIONS else defaults["minimum_income"],
+        "push_window_hours": push_window_hours if push_window_hours in PUSH_WINDOW_OPTIONS else defaults["push_window_hours"],
+    }
+
+
+def validate_run_filter_config(payload):
+    """Validate controls received from the password-protected dashboard."""
+    if not isinstance(payload, dict):
+        raise ValueError("筛选配置格式无效")
+    available = set(selectable_provinces())
+    provinces = payload.get("provinces")
+    if not isinstance(provinces, list):
+        raise ValueError("请选择至少一个省份")
+    provinces = [str(province) for province in provinces]
+    if any(province not in available for province in provinces):
+        raise ValueError("省份选项无效")
+    if not provinces:
+        raise ValueError("请选择至少一个省份")
+    try:
+        minimum_income = int(payload.get("minimum_income"))
+    except (TypeError, ValueError):
+        raise ValueError("工资选项无效") from None
+    try:
+        push_window_hours = int(payload.get("push_window_hours"))
+    except (TypeError, ValueError):
+        raise ValueError("群推送时间窗无效") from None
+    if minimum_income not in INCOME_OPTIONS or push_window_hours not in PUSH_WINDOW_OPTIONS:
+        raise ValueError("筛选选项无效")
+    return {
+        "provinces": [province for province in selectable_provinces() if province in set(provinces)],
+        "minimum_income": minimum_income,
+        "push_window_hours": push_window_hours,
+    }
+
+
+def save_run_filter_config(config):
+    set_state("run_filter_config", json.dumps(config, ensure_ascii=False))
 
 
 def cancel_auto_restart(announce=False):
@@ -1770,12 +1852,16 @@ def certification_within_window(certification_time, hours=CERTIFICATION_WINDOW_H
 
 
 def recent_candidates():
+    push_window_hours = get_run_filter_config()["push_window_hours"]
     with DB_LOCK, db_connect() as connection:
         rows = [dict(row) for row in connection.execute(
             "SELECT * FROM members WHERE purple_visible = '是' "
             "AND member_id NOT IN (SELECT member_id FROM pushed_ids)"
         ).fetchall()]
-    return [row for row in rows if certification_within_window(row.get("certification_time"))]
+    return [
+        row for row in rows
+        if certification_within_window(row.get("certification_time"), hours=push_window_hours)
+    ]
 
 
 def day_label(certification_time):
@@ -1898,6 +1984,7 @@ def send_profile_album(avatar_path, card_path, caption):
 def push_new_candidates():
     if not TG_BOT_TOKEN or not GROUP_CHAT_ID:
         return
+    push_window_hours = get_run_filter_config()["push_window_hours"]
     candidates = recent_candidates()
     if not candidates:
         return
@@ -1916,7 +2003,7 @@ def push_new_candidates():
                 if profile:
                     moments = card_crawler.get_moments(user["member_id"])
                     _, fresh_certification, _, fresh_purple = card_crawler.parse_moments_times(moments)
-                    if not certification_within_window(fresh_certification) or not fresh_purple:
+                    if not certification_within_window(fresh_certification, hours=push_window_hours) or not fresh_purple:
                         with DB_LOCK, db_connect() as connection:
                             connection.execute(
                                 "UPDATE members SET purple_visible = '否' WHERE member_id = ?",
@@ -2022,10 +2109,29 @@ def index():
 @app.route("/start", methods=["POST"])
 @require_dashboard_access
 def start():
+    payload = request.get_json(silent=True)
     with start_lock:
+        if crawl_running.is_set():
+            return jsonify({"ok": False, "msg": "已有采集任务在运行"}), 409
+        try:
+            config = validate_run_filter_config(payload) if payload is not None else get_run_filter_config()
+        except ValueError as error:
+            return jsonify({"ok": False, "msg": str(error)}), 400
+        save_run_filter_config(config)
         cancel_auto_restart()
         ok, message = _launch_crawl()
     return jsonify({"ok": ok, "msg": message})
+
+
+@app.route("/api/run-config")
+@require_dashboard_access
+def api_run_config():
+    return jsonify({
+        "config": get_run_filter_config(),
+        "provinces": selectable_provinces(),
+        "income_options": INCOME_OPTIONS,
+        "push_window_options": PUSH_WINDOW_OPTIONS,
+    })
 
 
 @app.route("/stop", methods=["POST"])
@@ -2211,16 +2317,16 @@ body {
 .status { flex: 0 0 auto; padding: 8px 13px; border: 1px solid rgba(255,255,255,.2); border-radius: 999px; font-size: 13px; }
 .status.idle { color: #d5f5ef; background: rgba(15,118,110,.22); }
 .status.running { color: #ffe7bd; background: rgba(180,83,9,.28); }
-.dashboard {
-  position: relative;
-  isolation: isolate;
-  height: calc(100dvh - 72px);
-  min-height: 0;
-  overflow: hidden;
-  padding: clamp(14px, 2vw, 28px) clamp(24px, 4vw, 64px);
-  display: grid;
-  grid-template-rows: min-content minmax(0, 1fr) auto;
-  gap: 18px;
+	.dashboard {
+	  position: relative;
+	  isolation: isolate;
+	  height: calc(100dvh - 72px);
+	  min-height: 0;
+	  overflow: hidden;
+	  padding: clamp(14px, 2vw, 28px) clamp(24px, 4vw, 64px);
+	  display: grid;
+	  grid-template-rows: min-content min-content minmax(0, 1fr) auto;
+	  gap: 12px;
 }
 .dashboard::before {
   content: "";
@@ -2232,13 +2338,13 @@ body {
   background: url('/dashboard-background.jpg') center / contain no-repeat;
 }
 .dashboard > * { position: relative; z-index: 1; }
-.summary {
-  display: grid;
-  grid-template-columns: minmax(120px, .72fr) minmax(120px, .72fr) minmax(0, 1.56fr);
-  gap: 12px;
-  align-items: center;
-  min-height: 82px;
-  padding: 10px 12px;
+	.summary {
+	  display: grid;
+	  grid-template-columns: minmax(120px, .72fr) minmax(120px, .72fr) minmax(0, 1.56fr);
+	  gap: 12px;
+	  align-items: center;
+	  min-height: 66px;
+	  padding: 8px 10px;
   background: rgba(255,255,255,.84);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -2247,13 +2353,31 @@ body {
 .summary-label { margin: 0 0 2px; color: var(--muted); font-size: 12px; letter-spacing: .06em; }
 .summary-value { margin: 0; font-size: clamp(27px, 3vw, 38px); line-height: 1; font-weight: 750; color: var(--primary); }
 .summary-detail { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
-.stat-card { min-height: 58px; padding: 8px 11px; border: 1px solid rgba(217, 226, 236, .86); border-radius: 9px; background: rgba(255,255,255,.54); }
+	.stat-card { min-height: 48px; padding: 7px 10px; border: 1px solid rgba(217, 226, 236, .86); border-radius: 9px; background: rgba(255,255,255,.54); }
 .stat-card.total .summary-value { color: #a16207; }
 .stats-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 68vw; }
 .province-block { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; font-size: 12px; }
-.province-block .pname { color: var(--ink); font-weight: 700; }
-.province-block .ccount { color: var(--muted); }
-.log-panel {
+	.province-block .pname { color: var(--ink); font-weight: 700; }
+	.province-block .ccount { color: var(--muted); }
+	.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(217, 226, 236, .96); border-radius: 12px; background: rgba(255,255,255,.88); backdrop-filter: blur(4px); box-shadow: 0 10px 24px rgba(15,35,58,.07); }
+	.config-group { min-width: 0; }
+	.config-heading { margin: 0 0 7px; color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+	.config-meta { margin-left: 7px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: normal; }
+	.province-tools { display: flex; align-items: center; gap: 6px; margin: 0 0 7px; }
+	.tiny-btn { min-height: 25px; padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 6px; color: #334155; background: #f8fafc; font-size: 11px; font-weight: 700; cursor: pointer; }
+	.tiny-btn:hover:not(:disabled) { border-color: #0f766e; color: #0f766e; }
+	.selection-summary { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+	.province-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 5px; max-height: 92px; padding-right: 4px; overflow-y: auto; }
+	.province-option, .choice-option { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: #334155; font-size: 12px; line-height: 1.2; cursor: pointer; }
+	.province-option { min-height: 22px; padding: 3px 5px; border: 1px solid #e2e8f0; border-radius: 6px; background: rgba(248,250,252,.84); }
+	.province-option:has(input:checked) { color: #075f59; border-color: rgba(13,148,136,.45); background: rgba(204,251,241,.55); }
+	.config-side { display: grid; grid-template-columns: 1fr; align-content: center; gap: 11px; padding-left: 11px; border-left: 1px solid #e2e8f0; }
+	.choice-row { display: flex; flex-wrap: wrap; gap: 7px; }
+	.choice-option { min-height: 28px; padding: 5px 8px; border: 1px solid #dbe3ec; border-radius: 7px; background: rgba(248,250,252,.72); }
+	.choice-option:has(input:checked) { color: #075f59; border-color: rgba(13,148,136,.55); background: rgba(204,251,241,.62); font-weight: 700; }
+	.config-panel input { accent-color: var(--primary); }
+	.config-panel input:disabled, .config-panel label:has(input:disabled), .config-panel button:disabled { cursor: not-allowed; opacity: .52; }
+	.log-panel {
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2275,14 +2399,19 @@ body {
 .btn-start:hover:not(:disabled) { background: var(--primary-hover); }
 .btn-stop { background: var(--danger); }
 .btn-stop:hover:not(:disabled) { background: var(--danger-hover); }
-@media (max-width: 720px) {
+	@media (max-width: 720px) {
   .header { height: 62px; min-height: 62px; padding: 10px 18px; }
   .header h1 { font-size: 21px; }
-  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
-  .summary { grid-template-columns: 1fr 1fr; }
+	  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
+	  .summary { grid-template-columns: 1fr 1fr; }
   .stats-list { grid-column: 1 / -1; justify-content: flex-start; }
   .stats-list { justify-content: flex-start; max-width: none; }
-  .log-panel { height: auto; }
+	  .log-panel { height: auto; }
+	  .config-panel { grid-template-columns: 1fr; gap: 8px; padding: 9px; }
+	  .config-side { grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; border-left: 0; }
+	  .province-list { grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); max-height: 62px; }
+	  .choice-row { gap: 5px; }
+	  .choice-option { padding: 4px 6px; font-size: 11px; }
   .actions { display: grid; grid-template-columns: 1fr 1fr; }
   .btn { min-width: 0; min-height: 44px; width: 100%; }
 }
@@ -2307,9 +2436,31 @@ body {
       <p class="summary-value" id="statsAllTotal">0</p>
     </div>
     <div class="stats-list" id="statsByProvince"></div>
-  </section>
+	  </section>
 
-  <section class="log-panel" aria-label="采集运行日志">
+	  <section class="config-panel" id="runConfig" aria-label="启动前采集配置">
+	    <div class="config-group">
+	      <p class="config-heading">采集省份 <span class="config-meta">福建已排除</span></p>
+	      <div class="province-tools">
+	        <button class="tiny-btn" id="selectAllProvinces" type="button">全选</button>
+	        <button class="tiny-btn" id="clearProvinces" type="button">清空</button>
+	        <span class="selection-summary" id="provinceSummary">加载中…</span>
+	      </div>
+	      <div class="province-list" id="provinceOptions" role="group" aria-label="选择采集省份"></div>
+	    </div>
+	    <div class="config-side">
+	      <div class="config-group">
+	        <p class="config-heading">工资要求 <span class="config-meta">最低月收入</span></p>
+	        <div class="choice-row" id="incomeOptions"></div>
+	      </div>
+	      <div class="config-group">
+	        <p class="config-heading">群推送要求 <span class="config-meta">实名认证时限</span></p>
+	        <div class="choice-row" id="pushWindowOptions"></div>
+	      </div>
+	    </div>
+	  </section>
+
+	  <section class="log-panel" aria-label="采集运行日志">
     <div class="log-title">运行日志</div>
     <div class="log-area" id="log"><div class="line">等待启动采集任务…</div></div>
   </section>
@@ -2322,6 +2473,75 @@ body {
 
 <script>
 let eventSource = null;
+let configLoaded = false;
+let currentRunning = false;
+
+function selectedProvinces() {
+  return Array.from(document.querySelectorAll('#provinceOptions input:checked')).map(input => input.value);
+}
+
+function updateProvinceSummary() {
+  const selected = selectedProvinces().length;
+  const total = document.querySelectorAll('#provinceOptions input').length;
+  document.getElementById('provinceSummary').textContent = selected + ' / ' + total + ' 个省份';
+}
+
+function selectedRadioValue(containerId) {
+  const selected = document.querySelector('#' + containerId + ' input:checked');
+  return selected ? Number(selected.value) : null;
+}
+
+function renderRunConfig(data) {
+  const config = data.config || {};
+  const selected = new Set(config.provinces || []);
+  const provinceContainer = document.getElementById('provinceOptions');
+  provinceContainer.replaceChildren();
+  for (const province of data.provinces || []) {
+    const label = document.createElement('label');
+    label.className = 'province-option';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = province;
+    input.checked = selected.has(province);
+    input.addEventListener('change', updateProvinceSummary);
+    label.append(input, document.createTextNode(province));
+    provinceContainer.appendChild(label);
+  }
+  const incomeContainer = document.getElementById('incomeOptions');
+  incomeContainer.replaceChildren();
+  for (const income of data.income_options || []) {
+    const label = document.createElement('label');
+    label.className = 'choice-option';
+    const input = document.createElement('input');
+    input.type = 'radio'; input.name = 'minimumIncome'; input.value = income;
+    input.checked = Number(config.minimum_income) === Number(income);
+    label.append(input, document.createTextNode(Number(income) === 0 ? '不限（0）' : income + ' 元+'));
+    incomeContainer.appendChild(label);
+  }
+  const windowContainer = document.getElementById('pushWindowOptions');
+  windowContainer.replaceChildren();
+  for (const hours of data.push_window_options || []) {
+    const label = document.createElement('label');
+    label.className = 'choice-option';
+    const input = document.createElement('input');
+    input.type = 'radio'; input.name = 'pushWindowHours'; input.value = hours;
+    input.checked = Number(config.push_window_hours) === Number(hours);
+    label.append(input, document.createTextNode(hours + ' 小时'));
+    windowContainer.appendChild(label);
+  }
+  configLoaded = true;
+  updateProvinceSummary();
+  setRunning(currentRunning);
+}
+
+document.getElementById('selectAllProvinces').addEventListener('click', () => {
+  document.querySelectorAll('#provinceOptions input').forEach(input => { input.checked = true; });
+  updateProvinceSummary();
+});
+document.getElementById('clearProvinces').addEventListener('click', () => {
+  document.querySelectorAll('#provinceOptions input').forEach(input => { input.checked = false; });
+  updateProvinceSummary();
+});
 
 function renderStats(stats) {
   document.getElementById('statsTotal').textContent = stats.total || 0;
@@ -2354,8 +2574,10 @@ function log(message) {
 }
 
 function setRunning(running) {
-  document.getElementById('btnStart').disabled = running;
+  currentRunning = running;
+  document.getElementById('btnStart').disabled = running || !configLoaded;
   document.getElementById('btnStop').disabled = !running;
+  document.querySelectorAll('#runConfig input, #runConfig button').forEach(element => { element.disabled = running; });
   const status = document.getElementById('status');
   status.textContent = running ? '运行中' : '空闲';
   status.className = 'status ' + (running ? 'running' : 'idle');
@@ -2394,8 +2616,21 @@ function connectStream() {
 }
 
 async function startCrawl() {
+  const config = {
+    provinces: selectedProvinces(),
+    minimum_income: selectedRadioValue('incomeOptions'),
+    push_window_hours: selectedRadioValue('pushWindowOptions'),
+  };
+  if (!config.provinces.length) {
+    log('无法启动：请至少选择一个省份。');
+    return;
+  }
   try {
-    const response = await fetch('/start', { method: 'POST' });
+    const response = await fetch('/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(config),
+    });
     const result = await response.json();
     if (!result.ok) {
       log('无法启动：' + result.msg);
@@ -2422,6 +2657,10 @@ async function stopCrawl() {
 }
 
 fetch('/api/stats').then(response => response.json()).then(renderStats);
+fetch('/api/run-config').then(response => {
+  if (!response.ok) throw new Error('无法读取启动配置');
+  return response.json();
+}).then(renderRunConfig).catch(error => log('配置加载失败：' + error.message));
 fetch('/status').then(response => response.json()).then(status => {
   setRunning(status.running);
   if (status.running) connectStream();

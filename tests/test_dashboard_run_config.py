@@ -1,0 +1,84 @@
+"""Regression checks for pre-launch dashboard controls.
+
+Run with: python3 tests/test_dashboard_run_config.py
+"""
+
+import importlib.util
+import json
+import os
+import tempfile
+from pathlib import Path
+
+SOURCE = Path(__file__).resolve().parents[1] / "app.py"
+
+with tempfile.TemporaryDirectory() as temp_dir:
+    os.environ["ZHENAI_BASE_DIR"] = temp_dir
+    os.environ["DASHBOARD_ACCESS_TOKEN"] = "test-dashboard-token"
+    spec = importlib.util.spec_from_file_location("dashboard_run_config_test", SOURCE)
+    service = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(service)
+    service.init_db()
+
+    assert "福建" not in service.selectable_provinces()
+    assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - 1
+    assert service.default_run_filter_config()["minimum_income"] == 3000
+    assert service.default_run_filter_config()["push_window_hours"] == 48
+
+    config = service.validate_run_filter_config({
+        "provinces": ["广东", "北京"],
+        "minimum_income": 8000,
+        "push_window_hours": 24,
+    })
+    assert config == {"provinces": ["北京", "广东"], "minimum_income": 8000, "push_window_hours": 24}
+    service.save_run_filter_config(config)
+    assert service.get_run_filter_config() == config
+
+    for invalid in (
+        {"provinces": [], "minimum_income": 3000, "push_window_hours": 48},
+        {"provinces": ["福建"], "minimum_income": 3000, "push_window_hours": 48},
+        {"provinces": ["北京"], "minimum_income": 4000, "push_window_hours": 48},
+        {"provinces": ["北京"], "minimum_income": 3000, "push_window_hours": 36},
+    ):
+        try:
+            service.validate_run_filter_config(invalid)
+            raise AssertionError(f"invalid config accepted: {invalid}")
+        except ValueError:
+            pass
+
+    captured_payload = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"isError": False, "data": {"list": [], "hasNext": False}}
+
+    crawler = service.ZhenaiCrawler(token="token", seedtoken="")
+    crawler.session.post = lambda _url, data, headers: captured_payload.update(data) or FakeResponse()
+    crawler.search_members(page=2, page_size=20, age_begin=40, age_end=65, work_city=110100, gender=1, salary_begin=5000)
+    assert captured_payload["salaryBegin"] == 5000
+    assert captured_payload["salaryEnd"] == -1
+
+    service._launch_crawl = lambda: (True, "")
+    with service.app.test_client() as client:
+        with client.session_transaction() as session:
+            session["dashboard_access"] = True
+        response = client.get("/api/run-config")
+        assert response.status_code == 200
+        result = response.get_json()
+        assert "福建" not in result["provinces"]
+        assert result["income_options"] == [0, 3000, 5000, 8000, 12000]
+        assert result["push_window_options"] == [24, 48]
+
+        response = client.post("/start", json={
+            "provinces": ["上海"], "minimum_income": 12000, "push_window_hours": 24,
+        })
+        assert response.status_code == 200 and response.get_json()["ok"] is True
+        assert service.get_run_filter_config() == {
+            "provinces": ["上海"], "minimum_income": 12000, "push_window_hours": 24,
+        }
+
+os.environ.pop("ZHENAI_BASE_DIR", None)
+os.environ.pop("DASHBOARD_ACCESS_TOKEN", None)
+print("PASS: dashboard persists allowed province, income, and group push window selections")
