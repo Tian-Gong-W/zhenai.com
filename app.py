@@ -929,10 +929,6 @@ def process_member(crawler, mid, scraped_ids, cache_file,
         print(f"    解析会员 {mid} 失败或返回空")
         return False
 
-    if not income_meets_minimum(parsed.get("月收入", ""), minimum_income):
-        print(f"    跳过: {parsed['昵称']} (月收入: {parsed.get('月收入')}，低于{minimum_income}元)")
-        return False
-
     # 城市过滤
     if city_filter and city_filter not in parsed["居住地"]:
         print(f"    跳过: {parsed['昵称']} (居住地: {parsed['居住地']}，不含'{city_filter}')")
@@ -943,12 +939,9 @@ def process_member(crawler, mid, scraped_ids, cache_file,
         print(f"    跳过: {parsed['昵称']} (性别: {parsed['性别']}，不符合'{gender_filter}')")
         return False
 
-    # 额外过滤（月收入/学历/婚姻）
+    # 额外过滤（学历/婚姻）；工资条件只用于群推送，不拦截采集入库
     if extra_filters:
         income_f, edu_f, marriage_f = extra_filters
-        if income_f and parsed.get("月收入", "") != income_f:
-            print(f"    跳过: {parsed['昵称']} (月收入: {parsed.get('月收入')}，不符合'{income_f}')")
-            return False
         if edu_f and parsed.get("学历", "") != edu_f:
             print(f"    跳过: {parsed['昵称']} (学历: {parsed.get('学历')}，不符合'{edu_f}')")
             return False
@@ -1455,7 +1448,7 @@ def _launch_crawl(auto_started=False):
     else:
         emit(f"开始搜索采集 | 全国 | {gender} | {age_begin}-{age_end} 岁 | 最多 {max_pages} 页")
     emit(f"固定规则：近 {extra[3] * 24} 小时实名认证与紫图用户")
-    emit(f"收入规则：月收入 {extra[4]} 元以上")
+    emit(f"群推送规则：月收入 {extra[4]} 元以上")
     crawl_thread = threading.Thread(
         target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra), daemon=True,
     )
@@ -1570,7 +1563,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                 break
             members, has_next = crawler.search_members(
                 page=page, page_size=20, age_begin=age_begin, age_end=age_end,
-                work_city=city_code, gender=gender_value, salary_begin=extra[4],
+                work_city=city_code, gender=gender_value, salary_begin=-1,
             )
             if crawler.last_search_error_code == "-00004":
                 emit("❌ 登录状态已过期，已停止采集；请更新 MY_TOKEN 后再启动。")
@@ -1588,7 +1581,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                     continue
                 if process_member(
                     crawler, member_id, scraped, DB_PATH, DB_PATH, None, None,
-                    extra[:3], extra[3], minimum_income=extra[4],
+                    extra[:3], extra[3], minimum_income=0,
                 ):
                     city_new += 1
                     total_new += 1
@@ -1853,7 +1846,9 @@ def certification_within_window(certification_time, hours=CERTIFICATION_WINDOW_H
 
 
 def recent_candidates():
-    push_window_hours = get_run_filter_config()["push_window_hours"]
+    run_config = get_run_filter_config()
+    push_window_hours = run_config["push_window_hours"]
+    minimum_income = run_config["minimum_income"]
     with DB_LOCK, db_connect() as connection:
         rows = [dict(row) for row in connection.execute(
             "SELECT * FROM members WHERE purple_visible = '是' "
@@ -1862,6 +1857,7 @@ def recent_candidates():
     return [
         row for row in rows
         if certification_within_window(row.get("certification_time"), hours=push_window_hours)
+        and income_meets_minimum(row.get("income", ""), minimum_income)
     ]
 
 
@@ -2428,7 +2424,7 @@ body {
 	    </div>
 	    <div class="config-side">
 	      <div class="config-group">
-	        <p class="config-heading">工资要求 <span class="config-meta">最低月收入</span></p>
+	        <p class="config-heading">群推送工资要求 <span class="config-meta">最低月收入；采集不限工资</span></p>
 	        <div class="choice-row" id="incomeOptions"></div>
 	      </div>
 	      <div class="config-group">

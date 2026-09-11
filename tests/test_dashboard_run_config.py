@@ -71,8 +71,8 @@ with tempfile.TemporaryDirectory() as temp_dir:
 
     crawler = service.ZhenaiCrawler(token="token", seedtoken="")
     crawler.session.post = lambda _url, data, headers: captured_payload.update(data) or FakeResponse()
-    crawler.search_members(page=2, page_size=20, age_begin=40, age_end=65, work_city=110100, gender=1, salary_begin=5000)
-    assert captured_payload["salaryBegin"] == 5000
+    crawler.search_members(page=2, page_size=20, age_begin=40, age_end=65, work_city=110100, gender=1, salary_begin=-1)
+    assert captured_payload["salaryBegin"] == -1
     assert captured_payload["salaryEnd"] == -1
 
     service._launch_crawl = lambda: (True, "")
@@ -93,6 +93,10 @@ with tempfile.TemporaryDirectory() as temp_dir:
         assert service.get_run_filter_config() == {
             "provinces": selected_provinces, "minimum_income": 12000, "push_window_hours": 24,
         }
+
+        assert service.income_meets_minimum("3001-5000元", 8000) is False
+        assert service.income_meets_minimum("8001-12000元", 8000) is True
+        assert service.income_meets_minimum("50000元以上", 8000) is True
 
 os.environ.pop("ZHENAI_BASE_DIR", None)
 os.environ.pop("DASHBOARD_ACCESS_TOKEN", None)
