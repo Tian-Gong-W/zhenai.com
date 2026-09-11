@@ -2424,7 +2424,7 @@ body {
 	    </div>
 	    <div class="config-side">
 	      <div class="config-group">
-	        <p class="config-heading">群推送工资要求 <span class="config-meta">最低月收入；采集不限工资</span></p>
+	        <p class="config-heading">工资要求 <span class="config-meta">最低月收入</span></p>
 	        <div class="choice-row" id="incomeOptions"></div>
 	      </div>
 	      <div class="config-group">
