@@ -2125,6 +2125,7 @@ def build_runtime_status():
         "elapsed_seconds": int(now - started_at) if running and started_at else 0,
         "last_progress_seconds": progress_age,
         "last_log_seconds": int(now - last_log_at) if last_log_at else None,
+        "auto_restart_delay_seconds": AUTO_RESTART_DELAY_SECONDS,
         "auto_restart_in_seconds": 0 if running else auto_restart_remaining_seconds(),
     }
 
@@ -2134,7 +2135,10 @@ def format_runtime_status():
     state_icon = "🟢" if status["running"] and status["health"] == "正常" else ("🟡" if status["running"] else "⚪")
     progress = "暂无" if status["last_progress_seconds"] is None else f"{status['last_progress_seconds']}秒前"
     log_age = "暂无" if status["last_log_seconds"] is None else f"{status['last_log_seconds']}秒前"
-    auto_restart = "未安排" if not status["auto_restart_in_seconds"] else _format_elapsed(status["auto_restart_in_seconds"])
+    if status["running"]:
+        auto_restart = f"本轮完成后等待{_format_elapsed(status['auto_restart_delay_seconds'])}"
+    else:
+        auto_restart = "未安排" if not status["auto_restart_in_seconds"] else _format_elapsed(status["auto_restart_in_seconds"])
     return "\n".join((
         f"{state_icon} 采集状态：{status['health']}",
         f"地区：{'、'.join(status['provinces'])}",
