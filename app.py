@@ -1354,7 +1354,7 @@ def _get_search_config():
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
 PUSH_WINDOW_OPTIONS = (24, 48)
-MIN_SELECTED_PROVINCES = 15
+MIN_SELECTED_PROVINCES = _env_int("MIN_SELECTED_PROVINCES", 15)
 
 
 def selectable_provinces():
