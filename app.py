@@ -1712,14 +1712,18 @@ def tg_daily_push_reporter():
         if report_date != last_report_date and now.hour == 0 and now.minute == 0 and TG_BOT_TOKEN and GROUP_CHAT_ID:
             try:
                 with DB_LOCK, db_connect() as connection:
-                    count = connection.execute(
+                    collected_count = connection.execute(
+                        "SELECT COUNT(*) FROM members WHERE date(datetime(inserted_at, '+8 hours')) = ?", (report_date,)
+                    ).fetchone()[0]
+                    pushed_count = connection.execute(
                         "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (report_date,)
                     ).fetchone()[0]
                 text = "\n".join((
                     "📊 昨日群推送统计",
                     "━━━━━━━━━━",
                     f"日期：{report_date}",
-                    f"成功推送：{count} 条",
+                    f"当天采集：{collected_count} 条",
+                    f"成功推送：{pushed_count} 条",
                     "━━━━━━━━━━",
                     "机器人：TopMan_ZiYuan_bot",
                 ))
@@ -1729,7 +1733,7 @@ def tg_daily_push_reporter():
                 )
                 if telegram_response_ok(response, "sendMessage"):
                     set_state("last_daily_push_report_date", report_date)
-                    emit(f"📊 每日群推送统计已发送：{report_date}，{count}条")
+                    emit(f"📊 每日采集/推送统计已发送：{report_date}，采集{collected_count}条，推送{pushed_count}条")
             except (OSError, sqlite3.Error, requests.RequestException) as error:
                 emit(f"每日群推送统计发送失败：{error}")
         time.sleep(max(1, int((next_midnight - datetime.now(BEIJING_TZ)).total_seconds())))
