@@ -864,7 +864,7 @@ class ZhenaiCrawler:
             return "", "", "", False
 
         def fmt(ts):
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts / 1000)) if ts else ""
+            return datetime.fromtimestamp(ts / 1000, BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
 
         latest = fmt(moments[0].get("moment", {}).get("createTime"))
         cert = ""
