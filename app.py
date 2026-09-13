@@ -84,7 +84,7 @@ DEFAULT_SEARCH_CONFIG = {
     "age_begin": _env_int("SEARCH_AGE_BEGIN", 45),
     "age_end": _env_int("SEARCH_AGE_END", 60),
     "gender": "女",
-    "max_pages": 100,
+    "max_pages": _env_int("MAX_CITY_PAGES", 500),
     "minimum_income": 3000,
     "push_window_hours": _env_int("PUSH_WINDOW_HOURS", 48),
     "income_filter": "",
@@ -1599,7 +1599,6 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
         set_state("city_progress", city_name)
         set_state("runtime_last_progress_at", str(time.time()))
         city_new = 0
-        zero_streak = 0
         for page in range(1, max_pages + 1):
             if not crawl_running.is_set():
                 break
@@ -1621,7 +1620,6 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
             ids = [member.get("memberId") or member.get("memberID") or member.get("objectID") for member in members]
             ids = [member_id for member_id in ids if member_id]
             new_ids = [member_id for member_id in ids if str(member_id) not in scraped]
-            zero_streak = 0 if new_ids else zero_streak + 1
             emit(f"  📄 第{page}页: {len(ids)}人, 新{len(new_ids)}人")
             for member_id in ids:
                 if str(member_id) in scraped or not crawl_running.is_set():
@@ -1634,9 +1632,6 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                     total_new += 1
                 time.sleep(0.3)
             if not has_next or not crawl_running.is_set():
-                break
-            if zero_streak >= 10:
-                emit(f"  ⏩ {city_name} 连续{zero_streak}页无新人，跳过剩余页")
                 break
             time.sleep(0.3)
         current_stats.setdefault("by_province", {}).setdefault(province, {})[city_name] = city_new
@@ -1703,6 +1698,41 @@ def tg_hourly_reporter():
         except (OSError, ValueError, sqlite3.Error):
             emit("定时播报统计失败，不影响采集任务。")
         next_report_at = time.monotonic() + REPORT_INTERVAL_SECONDS
+
+
+def tg_daily_push_reporter():
+    """Send yesterday's successful group-push count at Beijing midnight."""
+    last_report_date = get_state("last_daily_push_report_date", "")
+    while True:
+        now = datetime.now(BEIJING_TZ)
+        report_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+        if now.hour == 0 and now.minute == 0 and now.second >= 5:
+            next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+        if report_date != last_report_date and now.hour == 0 and now.minute == 0 and TG_BOT_TOKEN and GROUP_CHAT_ID:
+            try:
+                with DB_LOCK, db_connect() as connection:
+                    count = connection.execute(
+                        "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (report_date,)
+                    ).fetchone()[0]
+                text = "\n".join((
+                    "📊 昨日群推送统计",
+                    "━━━━━━━━━━",
+                    f"日期：{report_date}",
+                    f"成功推送：{count} 条",
+                    "━━━━━━━━━━",
+                    "机器人：TopMan_ZiYuan_bot",
+                ))
+                response = requests.post(
+                    f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": GROUP_CHAT_ID, "text": text}, timeout=15,
+                )
+                if telegram_response_ok(response, "sendMessage"):
+                    set_state("last_daily_push_report_date", report_date)
+                    emit(f"📊 每日群推送统计已发送：{report_date}，{count}条")
+            except (OSError, sqlite3.Error, requests.RequestException) as error:
+                emit(f"每日群推送统计发送失败：{error}")
+        time.sleep(max(1, int((next_midnight - datetime.now(BEIJING_TZ)).total_seconds())))
 
 
 # ========== Telegram profile card pushes ==========
@@ -2785,6 +2815,7 @@ fetch('/status').then(response => response.json()).then(status => {
 
 def start_background_threads():
     threading.Thread(target=tg_hourly_reporter, daemon=True, name="tg-status-reporter").start()
+    threading.Thread(target=tg_daily_push_reporter, daemon=True, name="tg-daily-push-reporter").start()
     threading.Thread(target=group_push_reporter, daemon=True, name="tg-profile-card-reporter").start()
     threading.Thread(target=telegram_control_reporter, daemon=True, name="tg-private-control-reporter").start()
     resume_auto_restart_if_pending()
