@@ -1470,6 +1470,7 @@ def _launch_crawl(auto_started=False):
     provinces, age_begin, age_end, gender, max_pages, extra = _get_search_config()
     _get_today_start_total(_get_main_total())
     manual_stop_requested.clear()
+    set_state("crawl_intent", "running")
     set_state("runtime_started_at", str(time.time()))
     set_state("runtime_last_progress_at", str(time.time()))
     set_state("runtime_current_page", "0")
@@ -1539,6 +1540,17 @@ def resume_auto_restart_if_pending():
         schedule_auto_restart(remaining, restoring=True)
     elif get_state("auto_restart_at", ""):
         schedule_auto_restart(0, restoring=True)
+
+
+def resume_crawl_if_intended():
+    """Resume an interrupted crawl only when the last user intent was running."""
+    if get_state("crawl_intent", "") != "running" or crawl_running.is_set():
+        return
+    if get_state("auto_restart_at", ""):
+        return
+    with start_lock:
+        if not crawl_running.is_set():
+            _launch_crawl(auto_started=True)
 
 
 def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0, 0)):
@@ -1654,7 +1666,10 @@ def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra):
         sys.stdout = old_stdout
         crawl_running.clear()
         if completed_normally and not manual_stop_requested.is_set():
-            schedule_auto_restart()
+            if AUTO_RESTART_ENABLED:
+                schedule_auto_restart()
+            else:
+                set_state("crawl_intent", "stopped")
         emit("__DONE__")
 
 
@@ -2183,6 +2198,7 @@ def telegram_control_reporter():
                     telegram_control_reply(reply_chat, "✅ 已启动广东 46–66 岁采集。" if ok else f"⚠️ 启动失败：{detail}")
                 elif command in {"/stop", "/stop_collect", "/暂停采集", "/关闭采集", "暂停采集", "关闭采集"}:
                     cancel_auto_restart()
+                    set_state("crawl_intent", "stopped")
                     manual_stop_requested.set()
                     crawl_running.clear()
                     telegram_control_reply(reply_chat, "⏹️ 已发送暂停请求，不会自动启动下一轮。")
@@ -2279,6 +2295,7 @@ def api_run_config():
 @require_dashboard_access
 def stop():
     cancel_auto_restart()
+    set_state("crawl_intent", "stopped")
     manual_stop_requested.set()
     crawl_running.clear()
     emit("⏹️ 已请求停止；不会自动启动下一轮。")
@@ -2771,6 +2788,7 @@ def start_background_threads():
     threading.Thread(target=group_push_reporter, daemon=True, name="tg-profile-card-reporter").start()
     threading.Thread(target=telegram_control_reporter, daemon=True, name="tg-private-control-reporter").start()
     resume_auto_restart_if_pending()
+    threading.Thread(target=resume_crawl_if_intended, daemon=True, name="crawl-resume-on-start").start()
 
 
 if __name__ == "__main__":
