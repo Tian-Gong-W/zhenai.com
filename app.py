@@ -58,6 +58,7 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 TG_CONTROL_CHAT_ID = os.environ.get("TG_CONTROL_CHAT_ID", "")
 TG_CONTROL_USER_ID = os.environ.get("TG_CONTROL_USER_ID", "")
+TG_PRIVATE_PUSH_ENABLED = os.environ.get("TG_PRIVATE_PUSH_ENABLED", "0") == "1"
 SCREENSHOT_TOKEN = os.environ.get("SCREENSHOT_TOKEN", "") or MY_TOKEN
 SCREENSHOT_SEED = os.environ.get("SCREENSHOT_SEED", "")
 TG_PROFILE_CARD_ENABLED = os.environ.get("TG_PROFILE_CARD_ENABLED", "1") != "0"
@@ -1341,7 +1342,7 @@ def send_start_report(age_begin, age_end, gender, cert_days):
         "━━━━━━━━━━━━━━━━",
         f"时间：{now.month}-{now.strftime('%d %H：%M')}",
     ))
-    for chat_id in dict.fromkeys((TG_CHAT_ID, GROUP_CHAT_ID)):
+    for chat_id in dict.fromkeys(((TG_CHAT_ID if TG_PRIVATE_PUSH_ENABLED else ""), GROUP_CHAT_ID)):
         if not chat_id:
             continue
         try:
@@ -1673,7 +1674,7 @@ def tg_hourly_reporter():
             total = _get_main_total()
             cert_today, cert_yesterday, cert_day_before, _ = _get_cert_daily_counts()
             today_new = total - _get_today_start_total(total)
-            if total > 0 and total != last_total and TG_BOT_TOKEN and TG_CHAT_ID:
+            if total > 0 and total != last_total and TG_BOT_TOKEN and TG_CHAT_ID and TG_PRIVATE_PUSH_ENABLED:
                 message = "\n".join((
                     "💵 八 方 来 财 💵", "━━━━━━━━━━", f"📝 今日采集数量: {today_new} 条",
                     f"💭 当天实名: {cert_today} 条", f"💭 昨日实名: {cert_yesterday} 条",
