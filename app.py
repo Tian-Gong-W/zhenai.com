@@ -1331,7 +1331,7 @@ class LogCapture(io.StringIO):
 def send_start_report(age_begin, age_end, gender, cert_days):
     if not TG_BOT_TOKEN:
         return
-    now = datetime.now()
+    now = datetime.now(BEIJING_TZ)
     message = "\n".join((
         "『 状 态 正 常 』",
         "━━━━━━━━━━━━━━━━",
@@ -1479,7 +1479,7 @@ def _launch_crawl(auto_started=False):
     if auto_started:
         emit("🔄 30 分钟等待结束，已自动启动新一轮全国城市采集。")
     else:
-        emit(f"开始搜索采集 | 全国 | {gender} | {age_begin}-{age_end} 岁 | 最多 {max_pages} 页")
+        emit(f"开始搜索采集 | {'、'.join(provinces)} | {gender} | {age_begin}-{age_end} 岁 | 最多 {max_pages} 页")
     emit(f"固定规则：近 {extra[3] * 24} 小时实名认证与紫图用户")
     emit(f"群推送规则：月收入 {extra[4]} 元以上")
     crawl_thread = threading.Thread(
@@ -2225,7 +2225,10 @@ def telegram_control_reporter():
                 if command in {"/start", "/start_collect", "/开启采集", "开启采集"}:
                     with start_lock:
                         ok, detail = _launch_crawl()
-                    telegram_control_reply(reply_chat, "✅ 已启动广东 46–66 岁采集。" if ok else f"⚠️ 启动失败：{detail}")
+                    age_begin = DEFAULT_SEARCH_CONFIG["age_begin"]
+                    age_end = DEFAULT_SEARCH_CONFIG["age_end"]
+                    provinces = "、".join(get_run_filter_config()["provinces"])
+                    telegram_control_reply(reply_chat, f"✅ 已启动{provinces} {age_begin}–{age_end} 岁采集。" if ok else f"⚠️ 启动失败：{detail}")
                 elif command in {"/stop", "/stop_collect", "/暂停采集", "/关闭采集", "暂停采集", "关闭采集"}:
                     cancel_auto_restart()
                     set_state("crawl_intent", "stopped")
