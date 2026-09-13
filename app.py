@@ -62,14 +62,28 @@ TG_PROFILE_CARD_ENABLED = os.environ.get("TG_PROFILE_CARD_ENABLED", "1") != "0"
 DASHBOARD_ACCESS_TOKEN = os.environ.get("DASHBOARD_ACCESS_TOKEN", "")
 DASHBOARD_SESSION_SECRET = os.environ.get("DASHBOARD_SESSION_SECRET", "")
 
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_list(name, default):
+    raw = os.environ.get(name, "")
+    values = [item.strip() for item in raw.split(",") if item.strip()]
+    return values or list(default)
+
+
 DEFAULT_SEARCH_CONFIG = {
-    "provinces": ["全国"],
-    "age_begin": 40,
-    "age_end": 65,
+    "provinces": _env_list("SEARCH_PROVINCES", ["全国"]),
+    "age_begin": _env_int("SEARCH_AGE_BEGIN", 40),
+    "age_end": _env_int("SEARCH_AGE_END", 65),
     "gender": "女",
     "max_pages": 100,
     "minimum_income": 3000,
-    "push_window_hours": 48,
+    "push_window_hours": _env_int("PUSH_WINDOW_HOURS", 48),
     "income_filter": "",
     "education_filter": "",
     "marriage_filter": "",
