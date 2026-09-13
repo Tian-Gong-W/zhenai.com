@@ -1238,6 +1238,17 @@ def _get_checkpoint_label():
     return current_city
 
 
+def _format_elapsed(seconds):
+    seconds = max(0, int(seconds))
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if hours:
+        return f"{hours}小时{minutes}分"
+    if minutes:
+        return f"{minutes}分{seconds}秒"
+    return f"{seconds}秒"
+
+
 def _get_today_start_total(total):
     today = datetime.now().strftime("%Y-%m-%d")
     try:
@@ -1278,6 +1289,7 @@ auto_restart_generation = 0
 def emit(message):
     """Broadcast one log event to every connected dashboard view."""
     message = str(message)
+    set_state("last_log_at", str(time.time()))
     with log_broadcast_lock:
         log_history.append(message)
         del log_history[:-LOG_HISTORY_LIMIT]
@@ -1457,6 +1469,9 @@ def _launch_crawl(auto_started=False):
     provinces, age_begin, age_end, gender, max_pages, extra = _get_search_config()
     _get_today_start_total(_get_main_total())
     manual_stop_requested.clear()
+    set_state("runtime_started_at", str(time.time()))
+    set_state("runtime_last_progress_at", str(time.time()))
+    set_state("runtime_current_page", "0")
     crawl_running.set()
     delete_state("auto_restart_at")
     if auto_started:
@@ -1569,6 +1584,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
 
         emit(f"\n📍 {city_name} ...")
         set_state("city_progress", city_name)
+        set_state("runtime_last_progress_at", str(time.time()))
         city_new = 0
         zero_streak = 0
         for page in range(1, max_pages + 1):
@@ -1581,6 +1597,8 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                 page=page, page_size=20, age_begin=age_begin, age_end=age_end,
                 work_city=city_code, gender=gender_value, salary_begin=-1,
             )
+            set_state("runtime_current_page", str(page))
+            set_state("runtime_last_progress_at", str(time.time()))
             if crawler.last_search_error_code == "-00004":
                 emit("❌ 登录状态已过期，已停止采集；请更新 MY_TOKEN 后再启动。")
                 crawl_running.clear()
@@ -2080,6 +2098,56 @@ def telegram_control_reply(chat_id, text):
         emit(f"Telegram 控制回复失败：{type(error).__name__}")
 
 
+def build_runtime_status():
+    now = time.time()
+    running = crawl_running.is_set()
+    started_at = float(get_state("runtime_started_at", "0") or 0)
+    last_progress_at = float(get_state("runtime_last_progress_at", "0") or 0)
+    last_log_at = float(get_state("last_log_at", "0") or 0)
+    progress_age = int(now - last_progress_at) if last_progress_at else None
+    if not running:
+        health = "已停止"
+    elif progress_age is not None and progress_age > 180:
+        health = "需留意：超过 3 分钟无页面进度"
+    else:
+        health = "正常"
+    filters = get_run_filter_config()
+    return {
+        "running": running,
+        "health": health,
+        "provinces": filters["provinces"],
+        "age_begin": DEFAULT_SEARCH_CONFIG["age_begin"],
+        "age_end": DEFAULT_SEARCH_CONFIG["age_end"],
+        "city": _get_current_city(),
+        "page": int(get_state("runtime_current_page", "0") or 0),
+        "new_records": current_stats["total"],
+        "elapsed_seconds": int(now - started_at) if running and started_at else 0,
+        "last_progress_seconds": progress_age,
+        "last_log_seconds": int(now - last_log_at) if last_log_at else None,
+        "auto_restart_in_seconds": 0 if running else auto_restart_remaining_seconds(),
+    }
+
+
+def format_runtime_status():
+    status = build_runtime_status()
+    state_icon = "🟢" if status["running"] and status["health"] == "正常" else ("🟡" if status["running"] else "⚪")
+    progress = "暂无" if status["last_progress_seconds"] is None else f"{status['last_progress_seconds']}秒前"
+    log_age = "暂无" if status["last_log_seconds"] is None else f"{status['last_log_seconds']}秒前"
+    auto_restart = "未安排" if not status["auto_restart_in_seconds"] else _format_elapsed(status["auto_restart_in_seconds"])
+    return "\n".join((
+        f"{state_icon} 采集状态：{status['health']}",
+        f"地区：{'、'.join(status['provinces'])}",
+        f"年龄：{status['age_begin']}-{status['age_end']}岁",
+        f"当前城市：{status['city']}",
+        f"当前页：第 {status['page']} 页",
+        f"本轮新增：{status['new_records']} 条",
+        f"已运行：{_format_elapsed(status['elapsed_seconds']) if status['running'] else '未运行'}",
+        f"最近进度：{progress}",
+        f"最近日志：{log_age}",
+        f"自动重启：{auto_restart}",
+    ))
+
+
 def telegram_control_reporter():
     """Poll private commands from one authorized Telegram user only."""
     if not TG_BOT_TOKEN or not TG_CONTROL_USER_ID:
@@ -2114,7 +2182,7 @@ def telegram_control_reporter():
                     crawl_running.clear()
                     telegram_control_reply(reply_chat, "⏹️ 已发送暂停请求，不会自动启动下一轮。")
                 elif command in {"/status", "/状态", "状态"}:
-                    telegram_control_reply(reply_chat, "🟢 采集运行中" if crawl_running.is_set() else "⚪ 当前未运行")
+                    telegram_control_reply(reply_chat, format_runtime_status())
                 else:
                     telegram_control_reply(reply_chat, "可用命令：/start_collect 开启、/stop_collect 暂停、/status 状态")
         except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as error:
@@ -2249,10 +2317,7 @@ def stream():
 @app.route("/status")
 @require_dashboard_access
 def status():
-    return jsonify({
-        "running": crawl_running.is_set(),
-        "auto_restart_in_seconds": 0 if crawl_running.is_set() else auto_restart_remaining_seconds(),
-    })
+    return jsonify(build_runtime_status())
 
 
 @app.route("/api/stats")
