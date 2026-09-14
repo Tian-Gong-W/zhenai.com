@@ -732,7 +732,7 @@ class ZhenaiCrawler:
             "multiConstellation":-1,
             "avatar":            -1,
             "zhenxin":           1,
-            "identityOk":        1,
+            "identityOk":        -1,
             "loginType":         3,
             "pageSize":          page_size,
             "page":              page,

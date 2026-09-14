@@ -81,6 +81,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     crawler.search_members(page=2, page_size=20, age_begin=40, age_end=65, work_city=110100, gender=1, salary_begin=-1)
     assert captured_payload["salaryBegin"] == -1
     assert captured_payload["salaryEnd"] == -1
+    assert captured_payload["identityOk"] == -1
 
     service._launch_crawl = lambda: (True, "")
     with service.app.test_client() as client:
