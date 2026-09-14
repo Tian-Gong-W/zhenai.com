@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     assert "福建" not in service.selectable_provinces()
     assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - 1
     assert service.default_run_filter_config()["minimum_income"] == 3000
-    assert service.default_run_filter_config()["push_window_hours"] == 40
+    assert service.default_run_filter_config()["push_window_hours"] == 48
     assert service.MIN_SELECTED_PROVINCES == 15
 
     selected_provinces = service.selectable_provinces()[:15]
