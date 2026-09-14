@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     assert "福建" not in service.selectable_provinces()
     assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - 1
     assert service.default_run_filter_config()["minimum_income"] == 3000
-    assert service.default_run_filter_config()["push_window_hours"] == 48
+    assert service.default_run_filter_config()["push_window_hours"] == 40
     assert service.MIN_SELECTED_PROVINCES == 15
 
     selected_provinces = service.selectable_provinces()[:15]
@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
         result = response.get_json()
         assert "福建" not in result["provinces"]
         assert result["income_options"] == [0, 3000, 5000, 8000, 12000]
-        assert result["push_window_options"] == [24, 48]
+        assert result["push_window_options"] == [24, 40, 48]
 
         response = client.post("/start", json={
             "provinces": selected_provinces, "minimum_income": 12000, "push_window_hours": 24,

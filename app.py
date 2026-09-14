@@ -86,7 +86,7 @@ DEFAULT_SEARCH_CONFIG = {
     "gender": "女",
     "max_pages": _env_int("MAX_CITY_PAGES", 500),
     "minimum_income": 3000,
-    "push_window_hours": _env_int("PUSH_WINDOW_HOURS", 48),
+    "push_window_hours": _env_int("PUSH_WINDOW_HOURS", 40),
     "income_filter": "",
     "education_filter": "",
     "marriage_filter": "",
@@ -1368,7 +1368,7 @@ def _get_search_config():
 
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
-PUSH_WINDOW_OPTIONS = (24, 48)
+PUSH_WINDOW_OPTIONS = (24, 40, 48)
 MIN_SELECTED_PROVINCES = _env_int("MIN_SELECTED_PROVINCES", 15)
 
 
