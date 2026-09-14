@@ -81,8 +81,8 @@ def _env_list(name, default):
 
 DEFAULT_SEARCH_CONFIG = {
     "provinces": _env_list("SEARCH_PROVINCES", ["广东", "山东"]),
-    "age_begin": _env_int("SEARCH_AGE_BEGIN", 45),
-    "age_end": _env_int("SEARCH_AGE_END", 60),
+    "age_begin": _env_int("SEARCH_AGE_BEGIN", 40),
+    "age_end": _env_int("SEARCH_AGE_END", 65),
     "gender": "女",
     "max_pages": _env_int("MAX_CITY_PAGES", 500),
     "minimum_income": 3000,
