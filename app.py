@@ -95,6 +95,7 @@ DEFAULT_SEARCH_CONFIG = {
 EXCLUDED_PROVINCES = {"福建"}
 REPORT_INTERVAL_SECONDS = 30 * 60
 PUSH_INTERVAL_SECONDS = 3 * 60
+CRAWL_DELAY_SECONDS = 0.5
 CARD_TTL_DAYS = 0
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 CERTIFICATION_WINDOW_HOURS = 48
@@ -1617,10 +1618,11 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
         set_state("city_progress", city_name)
         set_state("runtime_last_progress_at", str(time.time()))
         city_new = 0
-        for page in range(1, max_pages + 1):
+        # Page 1 is intentionally skipped for every city; start from page 2.
+        for page in range(2, max_pages + 1):
             if not crawl_running.is_set():
                 break
-            time.sleep(0.3)
+            time.sleep(CRAWL_DELAY_SECONDS)
             if not crawl_running.is_set():
                 break
             members, has_next = crawler.search_members(
@@ -1648,10 +1650,10 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                 ):
                     city_new += 1
                     total_new += 1
-                time.sleep(0.3)
+                time.sleep(CRAWL_DELAY_SECONDS)
             if not has_next or not crawl_running.is_set():
                 break
-            time.sleep(0.3)
+            time.sleep(CRAWL_DELAY_SECONDS)
         current_stats.setdefault("by_province", {}).setdefault(province, {})[city_name] = city_new
         current_stats["total"] = total_new
         emit(f"  ✅ {city_name}: +{city_new} | 累计: {total_new}")
