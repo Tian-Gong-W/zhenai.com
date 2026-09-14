@@ -1385,6 +1385,8 @@ def _get_search_config():
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
 PUSH_WINDOW_OPTIONS = (24, 40, 48)
+PUSH_AGE_BEGIN = _env_int("PUSH_AGE_BEGIN", 45)
+PUSH_AGE_END = _env_int("PUSH_AGE_END", 60)
 MIN_SELECTED_PROVINCES = _env_int("MIN_SELECTED_PROVINCES", 15)
 
 
@@ -1945,6 +1947,15 @@ def certification_within_window(certification_time, hours=CERTIFICATION_WINDOW_H
     return reference_now - timedelta(hours=hours) <= certification_dt <= reference_now
 
 
+def age_in_push_range(age_text):
+    """Return true only for members inside the independent group-push age range."""
+    try:
+        age = int(str(age_text or "").strip())
+    except (TypeError, ValueError):
+        return False
+    return PUSH_AGE_BEGIN <= age <= PUSH_AGE_END
+
+
 def recent_candidates():
     run_config = get_run_filter_config()
     push_window_hours = run_config["push_window_hours"]
@@ -1956,7 +1967,8 @@ def recent_candidates():
         ).fetchall()]
     return [
         row for row in rows
-        if certification_within_window(row.get("certification_time"), hours=push_window_hours)
+        if age_in_push_range(row.get("age"))
+        and certification_within_window(row.get("certification_time"), hours=push_window_hours)
         and income_meets_minimum(row.get("income", ""), minimum_income)
     ]
 
