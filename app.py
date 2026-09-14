@@ -2021,14 +2021,18 @@ def send_text(caption):
     return telegram_response_ok(response, "sendMessage")
 
 
-def send_card(card_path, caption):
+def send_card_to_chat(chat_id, card_path, caption):
     with open(card_path, "rb") as card_file:
         response = requests.post(
             f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto",
-            data={"chat_id": GROUP_CHAT_ID, "caption": caption},
+            data={"chat_id": chat_id, "caption": caption},
             files={"photo": (Path(card_path).name, card_file, "image/png")}, timeout=45,
         )
     return telegram_response_ok(response, "sendPhoto")
+
+
+def send_card(card_path, caption):
+    return send_card_to_chat(GROUP_CHAT_ID, card_path, caption)
 
 
 def get_avatar_url(profile, user):
@@ -2073,7 +2077,7 @@ def download_avatar(avatar_url):
     return avatar_path
 
 
-def send_profile_album(avatar_path, card_path, caption):
+def send_profile_album_to_chat(chat_id, avatar_path, card_path, caption):
     """Send the avatar first and the profile details card second as one Telegram album."""
     media = [
         {"type": "photo", "media": "attach://avatar", "caption": caption},
@@ -2082,7 +2086,7 @@ def send_profile_album(avatar_path, card_path, caption):
     with open(avatar_path, "rb") as avatar_file, open(card_path, "rb") as card_file:
         response = requests.post(
             f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMediaGroup",
-            data={"chat_id": GROUP_CHAT_ID, "media": json.dumps(media, ensure_ascii=False)},
+            data={"chat_id": chat_id, "media": json.dumps(media, ensure_ascii=False)},
             files={
                 "avatar": ("avatar.jpg", avatar_file, "image/jpeg"),
                 "profile_card": ("profile_card.png", card_file, "image/png"),
@@ -2090,6 +2094,52 @@ def send_profile_album(avatar_path, card_path, caption):
             timeout=60,
         )
     return telegram_response_ok(response, "sendMediaGroup")
+
+
+def send_profile_album(avatar_path, card_path, caption):
+    return send_profile_album_to_chat(GROUP_CHAT_ID, avatar_path, card_path, caption)
+
+
+def telegram_profile_lookup(chat_id, member_ids):
+    """Reply in an authorized private chat with an avatar and profile card per ID."""
+    if not SCREENSHOT_TOKEN:
+        telegram_control_reply(chat_id, "⚠️ 未配置资料查询凭据，暂时无法生成资料卡。")
+        return
+    crawler = ZhenaiCrawler(token=SCREENSHOT_TOKEN, seedtoken=SCREENSHOT_SEED)
+    for member_id in member_ids:
+        temporary_card = temporary_avatar = None
+        try:
+            profile = crawler.get_member_profile(member_id)
+            if not profile:
+                telegram_control_reply(chat_id, f"⚠️ ID {member_id} 未获取到用户资料。")
+                continue
+            parsed = crawler.parse_profile(profile) or {}
+            descriptor, temporary_card = tempfile.mkstemp(prefix="zhenai_lookup_card_", suffix=".png")
+            os.close(descriptor)
+            render_profile_card(profile, temporary_card)
+            temporary_avatar = download_avatar(get_avatar_url(profile, {"avatar_url": parsed.get("头像链接", "")}))
+            caption = card_caption({
+                "member_id": member_id,
+                "nickname": parsed.get("昵称", ""),
+                "age": parsed.get("年龄", ""),
+                "city": parsed.get("居住地", ""),
+            })
+            if temporary_avatar:
+                sent = send_profile_album_to_chat(chat_id, temporary_avatar, temporary_card, caption)
+            else:
+                sent = send_card_to_chat(chat_id, temporary_card, caption)
+            if not sent:
+                telegram_control_reply(chat_id, f"⚠️ ID {member_id} 发送失败。")
+        except (OSError, ValueError, requests.RequestException) as error:
+            emit(f"私人资料查询失败：{type(error).__name__}")
+            telegram_control_reply(chat_id, f"⚠️ ID {member_id} 查询失败。")
+        finally:
+            for path in (temporary_card, temporary_avatar):
+                if path:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
 
 
 def push_new_candidates():
@@ -2254,7 +2304,8 @@ def telegram_control_reporter():
                 sender = message.get("from") or {}
                 if chat.get("type") != "private" or str(sender.get("id", "")) != str(TG_CONTROL_USER_ID):
                     continue
-                command = str(message.get("text", "")).strip().split()[0].lower() if message.get("text") else ""
+                text = str(message.get("text", "") or "").strip()
+                command = text.split()[0].lower() if text else ""
                 reply_chat = str(TG_CONTROL_CHAT_ID or chat.get("id", ""))
                 if command in {"/start", "/start_collect", "/开启采集", "开启采集"}:
                     with start_lock:
@@ -2272,7 +2323,18 @@ def telegram_control_reporter():
                 elif command in {"/status", "/状态", "状态"}:
                     telegram_control_reply(reply_chat, format_runtime_status())
                 else:
-                    telegram_control_reply(reply_chat, "可用命令：/start_collect 开启、/stop_collect 暂停、/status 状态")
+                    member_ids = list(dict.fromkeys(re.findall(r"(?<!\d)\d{5,12}(?!\d)", text)))
+                    if member_ids:
+                        member_ids = member_ids[:20]
+                        telegram_control_reply(reply_chat, f"🔎 已收到 {len(member_ids)} 个ID，正在查询资料卡和照片…")
+                        threading.Thread(
+                            target=telegram_profile_lookup,
+                            args=(str(chat.get("id", reply_chat)), member_ids),
+                            daemon=True,
+                            name="tg-private-profile-lookup",
+                        ).start()
+                    else:
+                        telegram_control_reply(reply_chat, "可用命令：/start_collect 开启、/stop_collect 暂停、/status 状态；也可直接发送一个或多个用户ID查询资料卡和照片。")
         except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as error:
             emit(f"Telegram 私聊控制检查失败：{type(error).__name__}")
             time.sleep(10)
