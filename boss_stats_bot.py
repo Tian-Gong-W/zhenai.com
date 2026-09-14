@@ -61,10 +61,15 @@ def send_lookup_card(chat_id, member_id, crawler):
         zhenai_app.render_profile_card(profile, card_path)
         avatar_url = zhenai_app.get_avatar_url(profile, {"avatar_url": parsed.get("头像链接", "")})
         avatar_path = zhenai_app.download_avatar(avatar_url)
+        try:
+            moments = crawler.get_moments(member_id)
+            _, certification_time, _, _ = crawler.parse_moments_times(moments)
+        except Exception:
+            certification_time = ""
         caption = " | ".join((
             f"ID:{member_id}", str(parsed.get("昵称", "") or ""),
             f"{parsed.get('年龄', '')}岁", str(parsed.get("居住地", "") or ""),
-        ))
+        )) + f"\n实名时间:{certification_time or '未获取到'}"
         if avatar_path:
             media = [
                 {"type": "photo", "media": "attach://avatar", "caption": caption},
