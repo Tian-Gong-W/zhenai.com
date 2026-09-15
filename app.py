@@ -2230,14 +2230,11 @@ def telegram_control_reply(chat_id, text):
 
 
 def format_group_stats_report():
-    """Format the US instance's Beijing-time collection and successful-push counts."""
+    """Format the US instance's compact Beijing-time push-count report."""
     now = datetime.now(BEIJING_TZ)
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     with DB_LOCK, db_connect() as connection:
-        today_collected = connection.execute(
-            "SELECT COUNT(*) FROM members WHERE date(datetime(inserted_at, '+8 hours')) = ?", (today,)
-        ).fetchone()[0]
         today_pushed = connection.execute(
             "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (today,)
         ).fetchone()[0]
@@ -2246,13 +2243,13 @@ def format_group_stats_report():
         ).fetchone()[0]
         total_pushed = connection.execute("SELECT COUNT(DISTINCT member_id) FROM pushed_ids").fetchone()[0]
     return "\n".join((
-        "📊 美国服务器实时统计",
         "━━━━━━━━━━",
-        f"今日采集：{today_collected} 条",
-        f"今日群推：{today_pushed} 条",
-        f"昨日群推：{yesterday_pushed} 条",
-        f"累计群推：{total_pushed} 条",
+        "『 八 方 来 财 』",
         "━━━━━━━━━━",
+        f"💭 当日实时：{today_pushed}条",
+        f"📅 昨日推送：{yesterday_pushed}条",
+        "━━━━━━━━━━",
+        f"总合：{total_pushed}条",
         f"北京时间：{now:%m月%d日 %H:%M}",
     ))
 
