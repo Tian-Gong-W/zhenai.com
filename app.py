@@ -58,6 +58,7 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 TG_CONTROL_CHAT_ID = os.environ.get("TG_CONTROL_CHAT_ID", "")
 TG_CONTROL_USER_ID = os.environ.get("TG_CONTROL_USER_ID", "")
+TG_BOT_USERNAME = os.environ.get("TG_BOT_USERNAME", "TopMan_ZiYuan_bot")
 TG_PRIVATE_PUSH_ENABLED = os.environ.get("TG_PRIVATE_PUSH_ENABLED", "0") == "1"
 SCREENSHOT_TOKEN = os.environ.get("SCREENSHOT_TOKEN", "") or MY_TOKEN
 SCREENSHOT_SEED = os.environ.get("SCREENSHOT_SEED", "")
@@ -2228,6 +2229,34 @@ def telegram_control_reply(chat_id, text):
         emit(f"Telegram 控制回复失败：{type(error).__name__}")
 
 
+def format_group_stats_report():
+    """Format the US instance's Beijing-time collection and successful-push counts."""
+    now = datetime.now(BEIJING_TZ)
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    with DB_LOCK, db_connect() as connection:
+        today_collected = connection.execute(
+            "SELECT COUNT(*) FROM members WHERE date(datetime(inserted_at, '+8 hours')) = ?", (today,)
+        ).fetchone()[0]
+        today_pushed = connection.execute(
+            "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (today,)
+        ).fetchone()[0]
+        yesterday_pushed = connection.execute(
+            "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (yesterday,)
+        ).fetchone()[0]
+        total_pushed = connection.execute("SELECT COUNT(DISTINCT member_id) FROM pushed_ids").fetchone()[0]
+    return "\n".join((
+        "📊 美国服务器实时统计",
+        "━━━━━━━━━━",
+        f"今日采集：{today_collected} 条",
+        f"今日群推：{today_pushed} 条",
+        f"昨日群推：{yesterday_pushed} 条",
+        f"累计群推：{total_pushed} 条",
+        "━━━━━━━━━━",
+        f"北京时间：{now:%m月%d日 %H:%M}",
+    ))
+
+
 def build_runtime_status():
     now = time.time()
     running = crawl_running.is_set()
@@ -2303,6 +2332,23 @@ def telegram_control_reporter():
                 chat = message.get("chat") or {}
                 sender = message.get("from") or {}
                 if chat.get("type") != "private" or str(sender.get("id", "")) != str(TG_CONTROL_USER_ID):
+                    if (
+                        chat.get("type") in {"group", "supergroup"}
+                        and str(chat.get("id", "")) == str(GROUP_CHAT_ID)
+                        and (
+                            f"@{TG_BOT_USERNAME}".lower() in str(message.get("text", "")).lower()
+                            or str(message.get("text", "")).strip().lower() in {"/stats", "/统计"}
+                            or str(message.get("text", "")).strip().lower().startswith(f"/stats@{TG_BOT_USERNAME}".lower())
+                        )
+                    ):
+                        try:
+                            response = requests.post(
+                                f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
+                                json={"chat_id": chat.get("id"), "text": format_group_stats_report()}, timeout=15,
+                            )
+                            telegram_response_ok(response, "group.stats.sendMessage")
+                        except (OSError, requests.RequestException, sqlite3.Error):
+                            emit("群内统计发送失败，不影响采集任务。")
                     continue
                 text = str(message.get("text", "") or "").strip()
                 command = text.split()[0].lower() if text else ""
