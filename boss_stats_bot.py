@@ -48,7 +48,7 @@ def send(chat_id, text, markup=None):
     if markup: body["reply_markup"] = markup
     requests.post(f"{API}/sendMessage", json=body, timeout=20)
 
-def send_lookup_card(chat_id, member_id, crawler):
+def send_lookup_card(chat_id, member_id, crawler, cc_number=""):
     profile = crawler.get_member_profile(member_id)
     if not profile:
         send(chat_id, f"⚠️ ID {member_id} 未获取到用户资料。")
@@ -67,7 +67,8 @@ def send_lookup_card(chat_id, member_id, crawler):
         except Exception:
             certification_time = ""
         caption = " | ".join((
-            f"ID:{member_id}", str(parsed.get("昵称", "") or ""),
+            f"ID:{member_id}", f"CC：{cc_number}" if cc_number else "",
+            str(parsed.get("昵称", "") or ""),
             f"{parsed.get('年龄', '')}岁", str(parsed.get("居住地", "") or ""),
         )) + f"\n实名时间:{certification_time or '未获取到'}"
         if avatar_path:
@@ -106,8 +107,21 @@ def lookup_ids(chat_id, ids):
         return
     send(chat_id, f"🔎 已收到 {len(ids)} 个ID，正在查询资料卡和照片…")
     crawler = zhenai_app.ZhenaiCrawler(token=zhenai_app.SCREENSHOT_TOKEN, seedtoken=zhenai_app.SCREENSHOT_SEED)
-    for member_id in ids:
-        send_lookup_card(chat_id, member_id, crawler)
+    for item in ids:
+        member_id, cc_number = item if isinstance(item, tuple) else (item, "")
+        send_lookup_card(chat_id, member_id, crawler, cc_number)
+
+def parse_lookup_requests(text):
+    """Parse one ID per line or tabular ID/CC pairs while preserving old ID-only input."""
+    requests_to_lookup = []
+    for line in str(text or "").splitlines():
+        numbers = re.findall(r"(?<!\d)\d{5,12}(?!\d)", line)
+        if len(numbers) >= 2:
+            requests_to_lookup.append((numbers[0], numbers[1]))
+        elif len(numbers) == 1:
+            requests_to_lookup.append((numbers[0], ""))
+    seen = set()
+    return [item for item in requests_to_lookup if not (item[0] in seen or seen.add(item[0]))][:20]
 
 def handle(update):
     if "callback_query" in update:
@@ -119,9 +133,9 @@ def handle(update):
     chat=msg.get("chat", {})
     sender=msg.get("from", {})
     if chat.get("type") == "private" and str(sender.get("id", "")) == AUTHORIZED_USER_ID:
-        ids=list(dict.fromkeys(re.findall(r"(?<!\d)\d{5,12}(?!\d)", text)))[:20]
-        if ids:
-            lookup_ids(str(chat.get("id")), ids)
+        lookup_requests = parse_lookup_requests(text)
+        if lookup_requests:
+            lookup_ids(str(chat.get("id")), lookup_requests)
             return
     if "@TopMan_Boss_Bot" in text or text.strip() in {"/stats", "/统计"}:
         text, markup=menu()
