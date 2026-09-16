@@ -695,7 +695,7 @@ class ZhenaiCrawler:
     def search_members(self, page=1, page_size=20,
                        age_begin=-1, age_end=-1,
                        work_city=-1, gender=1,
-                       salary_begin=-1, salary_end=-1):
+                       salary_begin=-1, salary_end=-1, hometown_city=-1):
         """
         通过条件搜索接口采集会员列表（需要登录态 token）。
 
@@ -727,7 +727,7 @@ class ZhenaiCrawler:
             "multiWorkCity":     work_city,
             "multiMarriage":     -1,
             "occupation":        -1,
-            "multiHomeTown":     -1,
+            "multiHomeTown":     hometown_city,
             "multiHouse":        -1,
             "car":               -1,
             "multiChildren":     -1,
@@ -1385,6 +1385,20 @@ def _get_search_config():
     )
 
 
+def get_location_mode():
+    """Return the whole-round location mode: work area or hometown."""
+    mode = get_state("location_mode", "work")
+    return mode if mode in {"work", "hometown"} else "work"
+
+
+def next_location_mode(mode):
+    return "hometown" if mode == "work" else "work"
+
+
+def location_mode_label(mode):
+    return "工作地区" if mode == "work" else "籍贯地区"
+
+
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
 PUSH_WINDOW_OPTIONS = (24, 40, 48)
 AGE_OPTIONS = ((40, 65), (45, 65), (50, 65), (55, 65))
@@ -1507,6 +1521,7 @@ def _launch_crawl(auto_started=False):
         return False, "已有采集任务在运行"
     clear_live_log_history()
     provinces, age_begin, age_end, gender, max_pages, extra = _get_search_config()
+    location_mode = get_location_mode()
     _get_today_start_total(_get_main_total())
     manual_stop_requested.clear()
     set_state("crawl_intent", "running")
@@ -1516,13 +1531,13 @@ def _launch_crawl(auto_started=False):
     crawl_running.set()
     delete_state("auto_restart_at")
     if auto_started:
-        emit("🔄 30 分钟等待结束，已自动启动新一轮全国城市采集。")
+        emit(f"🔄 等待结束，已自动启动新一轮{location_mode_label(location_mode)}采集。")
     else:
         emit(f"开始搜索采集 | {'、'.join(provinces)} | {gender} | {age_begin}-{age_end} 岁 | 最多 {max_pages} 页")
     emit(f"固定规则：近 {extra[3] * 24} 小时实名认证与紫图用户")
     emit(f"群推送规则：月收入 {extra[4]} 元以上")
     crawl_thread = threading.Thread(
-        target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra), daemon=True,
+        target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra, location_mode), daemon=True,
     )
     crawl_thread.start()
     threading.Thread(target=send_start_report, args=(age_begin, age_end, gender, extra[3]), daemon=True).start()
@@ -1560,7 +1575,7 @@ def schedule_auto_restart(delay_seconds=AUTO_RESTART_DELAY_SECONDS, restoring=Fa
     if restoring:
         emit("🔄 已恢复自动启动倒计时。")
     else:
-        emit("⏲️ 全国城市已全部完成；30 分钟后将自动启动下一轮采集。")
+        emit(f"⏲️ 本轮已完成；{location_mode_label(next_location_mode(get_location_mode()))}将在下一轮开始。")
 
 
 def auto_restart_remaining_seconds():
@@ -1592,7 +1607,7 @@ def resume_crawl_if_intended():
             _launch_crawl(auto_started=True)
 
 
-def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0, 0)):
+def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0, 0), location_mode="work"):
     crawler = ZhenaiCrawler(token=MY_TOKEN, seedtoken=MY_SEED)
     scraped = load_scraped_ids()
     gender_value = 1 if gender == "女" else 2
@@ -1610,7 +1625,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
     if not cities:
         emit("❌ 没有可执行的城市任务。")
         return False
-    emit(f"🗺️ 城市级覆盖：共 {len(cities)} 个城市，已排除福建。")
+    emit(f"🗺️ {location_mode_label(location_mode)}城市级覆盖：共 {len(cities)} 个城市，已排除福建。")
 
     total_new = 0
     current_stats["total"] = 0
@@ -1647,7 +1662,9 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                 break
             members, has_next = crawler.search_members(
                 page=page, page_size=20, age_begin=age_begin, age_end=age_end,
-                work_city=city_code, gender=gender_value, salary_begin=-1,
+                work_city=city_code if location_mode == "work" else -1,
+                hometown_city=city_code if location_mode == "hometown" else -1,
+                gender=gender_value, salary_begin=-1,
             )
             set_state("runtime_current_page", str(page))
             set_state("runtime_last_progress_at", str(time.time()))
@@ -1689,18 +1706,21 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
     return False
 
 
-def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra):
+def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra, location_mode="work"):
     old_stdout = sys.stdout
     completed_normally = False
     sys.stdout = LogCapture()
     try:
-        completed_normally = run_search(provinces, age_begin, age_end, gender, max_pages, extra)
+        completed_normally = run_search(provinces, age_begin, age_end, gender, max_pages, extra, location_mode)
     except Exception as error:
         emit(f"❌ 错误: {error}")
     finally:
         sys.stdout = old_stdout
         crawl_running.clear()
         if completed_normally and not manual_stop_requested.is_set():
+            next_mode = next_location_mode(location_mode)
+            set_state("location_mode", next_mode)
+            emit(f"✅ {location_mode_label(location_mode)}完整遍历结束；下一轮切换为{location_mode_label(next_mode)}。")
             if AUTO_RESTART_ENABLED:
                 schedule_auto_restart()
             else:
