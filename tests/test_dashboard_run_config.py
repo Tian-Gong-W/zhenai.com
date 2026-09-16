@@ -47,10 +47,12 @@ with tempfile.TemporaryDirectory() as temp_dir:
     selected_provinces = service.selectable_provinces()[:15]
     config = service.validate_run_filter_config({
         "provinces": list(reversed(selected_provinces)),
+        "age_begin": 40,
+        "age_end": 65,
         "minimum_income": 8000,
         "push_window_hours": 24,
     })
-    assert config == {"provinces": selected_provinces, "minimum_income": 8000, "push_window_hours": 24}
+    assert config == {"provinces": selected_provinces, "age_begin": 40, "age_end": 65, "minimum_income": 8000, "push_window_hours": 24}
     service.save_run_filter_config(config)
     assert service.get_run_filter_config() == config
 
@@ -93,13 +95,15 @@ with tempfile.TemporaryDirectory() as temp_dir:
         assert "福建" not in result["provinces"]
         assert result["income_options"] == [0, 3000, 5000, 8000, 12000]
         assert result["push_window_options"] == [24, 40, 48]
+        assert [40, 65] in result["age_options"]
 
         response = client.post("/start", json={
             "provinces": selected_provinces, "minimum_income": 12000, "push_window_hours": 24,
         })
         assert response.status_code == 200 and response.get_json()["ok"] is True
         assert service.get_run_filter_config() == {
-            "provinces": selected_provinces, "minimum_income": 12000, "push_window_hours": 24,
+            "provinces": selected_provinces, "age_begin": 40, "age_end": 65,
+            "minimum_income": 12000, "push_window_hours": 24,
         }
 
         assert service.income_meets_minimum("3001-5000元", 8000) is False

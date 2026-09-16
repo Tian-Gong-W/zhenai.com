@@ -1373,8 +1373,8 @@ def _get_search_config():
     filters = get_run_filter_config()
     return (
         list(filters["provinces"]),
-        DEFAULT_SEARCH_CONFIG["age_begin"],
-        DEFAULT_SEARCH_CONFIG["age_end"],
+        filters["age_begin"],
+        filters["age_end"],
         DEFAULT_SEARCH_CONFIG["gender"],
         DEFAULT_SEARCH_CONFIG["max_pages"],
         (
@@ -1387,6 +1387,7 @@ def _get_search_config():
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
 PUSH_WINDOW_OPTIONS = (24, 40, 48)
+AGE_OPTIONS = ((40, 65),) + tuple((start, min(start + 2, 65)) for start in range(40, 66, 3))
 PUSH_AGE_BEGIN = _env_int("PUSH_AGE_BEGIN", 45)
 PUSH_AGE_END = _env_int("PUSH_AGE_END", 60)
 MIN_SELECTED_PROVINCES = _env_int("MIN_SELECTED_PROVINCES", 15)
@@ -1400,6 +1401,8 @@ def selectable_provinces():
 def default_run_filter_config():
     return {
         "provinces": selectable_provinces(),
+        "age_begin": DEFAULT_SEARCH_CONFIG["age_begin"],
+        "age_end": DEFAULT_SEARCH_CONFIG["age_end"],
         "minimum_income": DEFAULT_SEARCH_CONFIG["minimum_income"],
         "push_window_hours": DEFAULT_SEARCH_CONFIG["push_window_hours"],
     }
@@ -1417,6 +1420,11 @@ def get_run_filter_config():
     provinces = [province for province in selected_provinces or defaults["provinces"] if province in valid_provinces]
     if not provinces:
         provinces = defaults["provinces"]
+    try:
+        age_begin = int(saved.get("age_begin", defaults["age_begin"]))
+        age_end = int(saved.get("age_end", defaults["age_end"]))
+    except (TypeError, ValueError):
+        age_begin, age_end = defaults["age_begin"], defaults["age_end"]
     minimum_income = saved.get("minimum_income", defaults["minimum_income"]) if isinstance(saved, dict) else defaults["minimum_income"]
     push_window_hours = saved.get("push_window_hours", defaults["push_window_hours"]) if isinstance(saved, dict) else defaults["push_window_hours"]
     try:
@@ -1429,6 +1437,8 @@ def get_run_filter_config():
         push_window_hours = defaults["push_window_hours"]
     return {
         "provinces": provinces,
+        "age_begin": age_begin if (age_begin, age_end) in AGE_OPTIONS else defaults["age_begin"],
+        "age_end": age_end if (age_begin, age_end) in AGE_OPTIONS else defaults["age_end"],
         "minimum_income": minimum_income if minimum_income in INCOME_OPTIONS else defaults["minimum_income"],
         "push_window_hours": push_window_hours if push_window_hours in PUSH_WINDOW_OPTIONS else defaults["push_window_hours"],
     }
@@ -1448,6 +1458,11 @@ def validate_run_filter_config(payload):
     if len(provinces) < MIN_SELECTED_PROVINCES:
         raise ValueError(f"请至少选择 {MIN_SELECTED_PROVINCES} 个省份")
     try:
+        age_begin = int(payload.get("age_begin", DEFAULT_SEARCH_CONFIG["age_begin"]))
+        age_end = int(payload.get("age_end", DEFAULT_SEARCH_CONFIG["age_end"]))
+    except (TypeError, ValueError):
+        raise ValueError("年龄范围无效") from None
+    try:
         minimum_income = int(payload.get("minimum_income"))
     except (TypeError, ValueError):
         raise ValueError("工资选项无效") from None
@@ -1455,10 +1470,14 @@ def validate_run_filter_config(payload):
         push_window_hours = int(payload.get("push_window_hours"))
     except (TypeError, ValueError):
         raise ValueError("群推送时间窗无效") from None
+    if (age_begin, age_end) not in AGE_OPTIONS:
+        raise ValueError("年龄范围无效")
     if minimum_income not in INCOME_OPTIONS or push_window_hours not in PUSH_WINDOW_OPTIONS:
         raise ValueError("筛选选项无效")
     return {
         "provinces": [province for province in selectable_provinces() if province in set(provinces)],
+        "age_begin": age_begin,
+        "age_end": age_end,
         "minimum_income": minimum_income,
         "push_window_hours": push_window_hours,
     }
@@ -2458,6 +2477,7 @@ def api_run_config():
     return jsonify({
         "config": get_run_filter_config(),
         "provinces": selectable_provinces(),
+        "age_options": AGE_OPTIONS,
         "income_options": INCOME_OPTIONS,
         "push_window_options": PUSH_WINDOW_OPTIONS,
     })
@@ -2684,7 +2704,7 @@ body {
 		.tiny-btn { min-height: 25px; padding: 3px 8px; border: 1px solid #c4b5fd; border-radius: 6px; color: #4c1d95; background: rgba(221,214,254,.58); font-size: 11px; font-weight: 700; cursor: pointer; }
 		.tiny-btn:hover:not(:disabled) { border-color: #7c3aed; color: #5b21b6; background: rgba(196,181,253,.72); }
 	.selection-summary { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
-	.province-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 5px; max-height: 92px; padding-right: 4px; overflow-y: auto; }
+		.province-list { display: grid; grid-auto-flow: column; grid-template-rows: repeat(5, minmax(22px, 1fr)); grid-auto-columns: minmax(82px, 1fr); gap: 5px; max-height: 135px; padding-right: 4px; overflow-x: auto; overflow-y: hidden; }
 	.province-option, .choice-option { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: #334155; font-size: 12px; line-height: 1.2; cursor: pointer; }
 		.province-option { min-height: 22px; padding: 3px 5px; border: 1px solid rgba(196,181,253,.75); border-radius: 6px; background: rgba(237,233,254,.76); }
 		.province-option:has(input:checked) { color: #4c1d95; border-color: rgba(124,58,237,.6); background: rgba(221,214,254,.8); }
@@ -2725,7 +2745,7 @@ body {
 	  .log-title { min-height: 50px; padding: 7px 9px 7px 13px; gap: 8px; }
 	  .config-panel { grid-template-columns: 1fr; gap: 8px; padding: 9px; }
 	  .config-side { grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; border-left: 0; }
-	  .province-list { grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); max-height: 62px; }
+		  .province-list { grid-auto-flow: row; grid-template-rows: none; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); max-height: 62px; overflow-x: hidden; overflow-y: auto; }
 	  .choice-row { gap: 5px; }
 	  .choice-option { padding: 4px 6px; font-size: 11px; }
 	  .actions { display: flex; gap: 6px; }
@@ -2752,8 +2772,12 @@ body {
 	      </div>
 	      <div class="province-list" id="provinceOptions" role="group" aria-label="选择采集省份"></div>
 	    </div>
-	    <div class="config-side">
-	      <div class="config-group">
+		    <div class="config-side">
+		      <div class="config-group">
+		        <p class="config-heading">年龄范围 <span class="config-meta">每档3岁</span></p>
+		        <div class="choice-row" id="ageOptions"></div>
+		      </div>
+		      <div class="config-group">
 	        <p class="config-heading">工资要求 <span class="config-meta">最低月收入</span></p>
 	        <div class="choice-row" id="incomeOptions"></div>
 	      </div>
@@ -2815,7 +2839,22 @@ function renderRunConfig(data) {
     label.append(input, document.createTextNode(province));
     provinceContainer.appendChild(label);
   }
-  const incomeContainer = document.getElementById('incomeOptions');
+	  const incomeContainer = document.getElementById('incomeOptions');
+	  const ageContainer = document.getElementById('ageOptions');
+	  ageContainer.replaceChildren();
+	  for (const range of data.age_options || []) {
+	    const label = document.createElement('label');
+	    label.className = 'choice-option';
+	    const input = document.createElement('input');
+	    input.type = 'radio'; input.name = 'ageRange'; input.value = range[0] + '-' + range[1];
+	    input.dataset.begin = range[0]; input.dataset.end = range[1];
+	    input.checked = Number(config.age_begin) === Number(range[0]) && Number(config.age_end) === Number(range[1]);
+	    label.append(input, document.createTextNode(range[0] + '–' + range[1] + '岁'));
+	    ageContainer.appendChild(label);
+	  }
+
+
+
   incomeContainer.replaceChildren();
   for (const income of data.income_options || []) {
     const label = document.createElement('label');
@@ -2906,6 +2945,8 @@ async function startCrawl() {
     provinces: selectedProvinces(),
     minimum_income: selectedRadioValue('incomeOptions'),
     push_window_hours: selectedRadioValue('pushWindowOptions'),
+    age_begin: Number(document.querySelector('#ageOptions input:checked')?.dataset.begin),
+    age_end: Number(document.querySelector('#ageOptions input:checked')?.dataset.end),
   };
   if (config.provinces.length < 15) {
     log('无法启动：请至少选择 15 个省份。');
