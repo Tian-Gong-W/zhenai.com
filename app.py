@@ -1387,7 +1387,7 @@ def _get_search_config():
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
 PUSH_WINDOW_OPTIONS = (24, 40, 48)
-AGE_OPTIONS = ((40, 65),) + tuple((start, min(start + 2, 65)) for start in range(40, 66, 3))
+AGE_OPTIONS = ((40, 65), (45, 65), (50, 65), (55, 65))
 PUSH_AGE_BEGIN = _env_int("PUSH_AGE_BEGIN", 45)
 PUSH_AGE_END = _env_int("PUSH_AGE_END", 60)
 MIN_SELECTED_PROVINCES = _env_int("MIN_SELECTED_PROVINCES", 15)
@@ -2774,7 +2774,7 @@ body {
 	    </div>
 		    <div class="config-side">
 		      <div class="config-group">
-		        <p class="config-heading">年龄范围 <span class="config-meta">每档3岁</span></p>
+	        <p class="config-heading">年龄范围 <span class="config-meta">4档选择</span></p>
 		        <div class="choice-row" id="ageOptions"></div>
 		      </div>
 		      <div class="config-group">
