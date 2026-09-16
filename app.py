@@ -897,7 +897,7 @@ FIELDNAMES = ["ID", "昵称", "性别", "年龄", "居住地", "月收入", "学
 
 
 def income_meets_minimum(income_text, minimum_income):
-    """Return whether a visible salary band can meet the configured monthly minimum."""
+    """Return whether a salary band's lower bound meets the configured minimum."""
     if not minimum_income:
         return True
     text = str(income_text or "").replace(",", "").replace("，", "")
@@ -906,7 +906,9 @@ def income_meets_minimum(income_text, minimum_income):
         return False
     if "以下" in text:
         return False
-    return max(values) >= minimum_income
+    # Salary labels are bands: 5001–8000 must not satisfy an 8000-plus
+    # requirement.  Use the lower bound for ranges, not the upper bound.
+    return values[0] >= minimum_income
 
 
 def process_member(crawler, mid, scraped_ids, cache_file,
