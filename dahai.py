@@ -340,6 +340,12 @@ def get_site_asset(asset_key):
 
 def load_scraped_ids():
     scraped = set()
+    try:
+        with DB_LOCK, db_connect() as connection:
+            for row in connection.execute("SELECT member_id FROM members"):
+                scraped.add(str(row[0]))
+    except sqlite3.Error:
+        pass
     if os.path.exists(SCRAPED_IDS_FILE):
         try:
             with open(SCRAPED_IDS_FILE, "r", encoding="utf-8") as f:
@@ -517,7 +523,7 @@ class ZhenaiCrawler:
             "loginType": 3, "pageSize": page_size, "page": page, "ua": req_ua,
         }
         try:
-            resp = self.session.post(url, data=payload, headers=self._common_headers(req_ua))
+            resp = self.session.post(url, data=payload, headers=self._common_headers(req_ua), timeout=(10, 30))
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("isError"):
@@ -536,7 +542,7 @@ class ZhenaiCrawler:
         req_ua = self.generate_ua()
         params = {"objectID": object_id, "wxApp": 1, "location": 0, "_method": "GET", "ua": req_ua}
         try:
-            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
+            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua), timeout=(10, 30))
             if resp.status_code == 200:
                 return resp.json().get("data", {})
             print(f"获取会员 {object_id} 资料失败: {resp.status_code}")
@@ -576,7 +582,7 @@ class ZhenaiCrawler:
             "_method": "GET", "ua": req_ua,
         }
         try:
-            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
+            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua), timeout=(10, 30))
             if resp.status_code == 200:
                 return resp.json().get("data", {}).get("list", []) or []
         except Exception as e:
@@ -1066,10 +1072,21 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
             set_state("runtime_last_progress_at", str(time.time()))
             if crawler.last_search_error_code == "-00004":
                 emit("❌ 登录状态已过期，已停止采集；请更新 MY_TOKEN 后再启动。")
+                set_state("crawl_intent", "stopped")
+                cancel_auto_restart()
                 crawl_running.clear()
                 break
             if not members:
-                break
+                if crawl_running.is_set():
+                    time.sleep(1.0)
+                    members, has_next = crawler.search_members(
+                        page=page, page_size=20, age_begin=age_begin, age_end=age_end,
+                        work_city=city_code if location_mode == "work" else -1,
+                        hometown_city=city_code if location_mode == "hometown" else -1,
+                        gender=gender_value, salary_begin=-1,
+                    )
+                if not members:
+                    break
             ids = [m.get("memberId") or m.get("memberID") or m.get("objectID") for m in members]
             ids = [member_id for member_id in ids if member_id]
             new_ids = [member_id for member_id in ids if str(member_id) not in scraped]
@@ -1142,7 +1159,7 @@ def tg_daily_push_reporter():
                     f"日期：{report_date}",
                     f"当天采集：{collected_count} 条",
                     f"成功推送：{pushed_count} 条",
-                    "━━━━━━━━━━", "机器人：TopMan_ZiYuan_bot",
+                    "━━━━━━━━━━", f"机器人：{TG_BOT_USERNAME or INSTANCE_TAG}",
                 ))
                 response = requests.post(
                     f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
