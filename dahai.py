@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
-"""TON MAN 2.0 single-file service.
+"""TON MAN 2.0 crawler and Telegram service.
 
-This file contains the nationwide city crawler, dashboard, Telegram status reporting,
-Telegram profile-card pushes, and all persistence logic. Runtime state is kept only in
-SQLite; credentials remain in .env.
+This file contains the crawler, SQLite persistence, Telegram controls, reporting,
+and profile-card delivery. It intentionally has no web dashboard or HTTP listener.
+Credentials remain in .env.
 """
 
 import csv
-import hashlib
-import hmac
+import csv
 import io
 import json
 import os
-import queue
 import re
 import sqlite3
-import sys
 import tempfile
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, Response, jsonify, render_template_string, request, session
 from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR = os.environ.get("ZHENAI_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
@@ -62,8 +57,6 @@ TG_PRIVATE_PUSH_ENABLED = os.environ.get("TG_PRIVATE_PUSH_ENABLED", "0") == "1"
 SCREENSHOT_TOKEN = os.environ.get("SCREENSHOT_TOKEN", "") or MY_TOKEN
 SCREENSHOT_SEED = os.environ.get("SCREENSHOT_SEED", "")
 TG_PROFILE_CARD_ENABLED = os.environ.get("TG_PROFILE_CARD_ENABLED", "1") != "0"
-DASHBOARD_ACCESS_TOKEN = os.environ.get("DASHBOARD_ACCESS_TOKEN", "")
-DASHBOARD_SESSION_SECRET = os.environ.get("DASHBOARD_SESSION_SECRET", "")
 
 
 def _env_int(name, default):
@@ -718,21 +711,7 @@ def process_member(crawler, mid, scraped_ids,
     return True
 
 
-# ========== Flask dashboard ==========
-app = Flask(__name__)
-app.secret_key = DASHBOARD_SESSION_SECRET or hashlib.sha256(
-    (DASHBOARD_ACCESS_TOKEN + "|ton-man-dashboard-session").encode("utf-8")
-).hexdigest()
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_SAMESITE="Strict",
-)
-LOG_HISTORY_LIMIT = 240
-SUBSCRIBER_QUEUE_LIMIT = 256
-log_history = []
-log_subscribers = set()
-log_broadcast_lock = threading.RLock()
+# ========== Runtime control (no web dashboard) ==========
 crawl_running = threading.Event()
 manual_stop_requested = threading.Event()
 start_lock = threading.Lock()
@@ -744,39 +723,15 @@ auto_restart_generation = 0
 
 
 def emit(message):
-    """Broadcast one log event to every connected dashboard view."""
+    """Record and write one crawler event without exposing an HTTP dashboard."""
     message = str(message)
     set_state("last_log_at", str(time.time()))
-    with log_broadcast_lock:
-        log_history.append(message)
-        del log_history[:-LOG_HISTORY_LIMIT]
-        for subscriber in tuple(log_subscribers):
-            try:
-                subscriber.put_nowait(message)
-            except queue.Full:
-                try:
-                    subscriber.get_nowait()
-                    subscriber.put_nowait(message)
-                except queue.Empty:
-                    pass
+    print(message, flush=True)
 
 
 def clear_live_log_history():
-    with log_broadcast_lock:
-        log_history.clear()
-
-
-class LogCapture(io.StringIO):
-    def write(self, value):
-        super().write(value)
-        for line in value.split("\n"):
-            if line.strip():
-                emit(line.strip())
-        return len(value)
-
-    def flush(self):
-        pass
-
+    """Compatibility hook: console/Telegram operation has no dashboard log buffer."""
+    return None
 
 def send_start_report(age_begin, age_end, gender, cert_days):
     if not TG_BOT_TOKEN:
@@ -1142,15 +1097,12 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
 
 
 def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra, location_mode="work"):
-    old_stdout = sys.stdout
     completed_normally = False
-    sys.stdout = LogCapture()
     try:
         completed_normally = run_search(provinces, age_begin, age_end, gender, max_pages, extra, location_mode)
     except Exception as error:
         emit(f"❌ 错误: {error}")
     finally:
-        sys.stdout = old_stdout
         crawl_running.clear()
         if completed_normally and not manual_stop_requested.is_set():
             next_mode = next_location_mode(location_mode)
@@ -1160,8 +1112,6 @@ def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra, locati
                 schedule_auto_restart()
             else:
                 set_state("crawl_intent", "stopped")
-        emit("__DONE__")
-
 
 def tg_daily_push_reporter():
     """Send yesterday's successful group-push count at Beijing midnight."""
@@ -1791,600 +1741,6 @@ def telegram_control_reporter():
             time.sleep(10)
 
 
-def dashboard_access_granted():
-    return bool(DASHBOARD_ACCESS_TOKEN) and session.get("dashboard_access") is True
-
-
-def require_dashboard_access(view):
-    @wraps(view)
-    def protected_view(*args, **kwargs):
-        if dashboard_access_granted():
-            return view(*args, **kwargs)
-        return jsonify({"ok": False, "error": "需要先验证访问口令"}), 401
-    return protected_view
-
-
-@app.route("/cover-background.jpg")
-def cover_background():
-    content, content_type = get_site_asset("cover_background")
-    if not content:
-        return Response(status=404)
-    return Response(content, mimetype=content_type, headers={"Cache-Control": "public, max-age=86400"})
-
-
-@app.route("/dashboard-background.jpg")
-@require_dashboard_access
-def dashboard_background():
-    content, content_type = get_site_asset("dashboard_background")
-    if not content:
-        return Response(status=404)
-    return Response(content, mimetype=content_type, headers={"Cache-Control": "private, max-age=86400"})
-
-
-@app.route("/login", methods=["POST"])
-def login():
-    payload = request.get_json(silent=True) or {}
-    supplied_token = str(payload.get("token", ""))
-    if not DASHBOARD_ACCESS_TOKEN or not hmac.compare_digest(supplied_token, DASHBOARD_ACCESS_TOKEN):
-        return jsonify({"ok": False, "error": "口令无效"}), 401
-    session.clear()
-    session["dashboard_access"] = True
-    return jsonify({"ok": True})
-
-
-@app.route("/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return jsonify({"ok": True})
-
-
-@app.route("/")
-def index():
-    return render_template_string(HTML_TEMPLATE if dashboard_access_granted() else COVER_TEMPLATE)
-
-
-@app.route("/start", methods=["POST"])
-@require_dashboard_access
-def start():
-    payload = request.get_json(silent=True)
-    with start_lock:
-        if crawl_running.is_set():
-            return jsonify({"ok": False, "msg": "已有采集任务在运行"}), 409
-        try:
-            config = validate_run_filter_config(payload) if payload is not None else get_run_filter_config()
-        except ValueError as error:
-            return jsonify({"ok": False, "msg": str(error)}), 400
-        save_run_filter_config(config)
-        cancel_auto_restart()
-        ok, message = _launch_crawl()
-    return jsonify({"ok": ok, "msg": message})
-
-
-@app.route("/api/run-config")
-@require_dashboard_access
-def api_run_config():
-    return jsonify({
-        "config": get_run_filter_config(),
-        "provinces": selectable_provinces(),
-        "age_options": AGE_OPTIONS,
-        "income_options": INCOME_OPTIONS,
-        "push_window_options": PUSH_WINDOW_OPTIONS,
-    })
-
-
-@app.route("/stop", methods=["POST"])
-@require_dashboard_access
-def stop():
-    cancel_auto_restart()
-    set_state("crawl_intent", "stopped")
-    manual_stop_requested.set()
-    crawl_running.clear()
-    emit("⏹️ 已请求停止；不会自动启动下一轮。")
-    return jsonify({"ok": True})
-
-
-@app.route("/stream")
-@require_dashboard_access
-def stream():
-    def generate():
-        subscriber = queue.Queue(maxsize=SUBSCRIBER_QUEUE_LIMIT)
-        with log_broadcast_lock:
-            log_subscribers.add(subscriber)
-            history = list(log_history)
-        try:
-            for message in history:
-                if message.startswith("__STATS__:"):
-                    yield f"event: stats\ndata: {message[9:]}\n\n"
-                elif message != "__DONE__":
-                    yield f"data: {json.dumps({'msg': message}, ensure_ascii=False)}\n\n"
-            if current_stats["total"] > 0:
-                yield f"event: stats\ndata: {json.dumps(current_stats, ensure_ascii=False)}\n\n"
-            while True:
-                try:
-                    message = subscriber.get(timeout=1)
-                    if message == "__DONE__":
-                        yield 'data: {"done": true}\n\n'
-                        break
-                    if message.startswith("__STATS__:"):
-                        yield f"event: stats\ndata: {message[9:]}\n\n"
-                    else:
-                        yield f"data: {json.dumps({'msg': message}, ensure_ascii=False)}\n\n"
-                except queue.Empty:
-                    yield 'data: {"ping": true}\n\n'
-        finally:
-            with log_broadcast_lock:
-                log_subscribers.discard(subscriber)
-    return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.route("/status")
-@require_dashboard_access
-def status():
-    return jsonify(build_runtime_status())
-
-
-@app.route("/api/stats")
-@require_dashboard_access
-def api_stats():
-    return jsonify({**current_stats, "all_total": _get_main_total()})
-
-
-COVER_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="robots" content="noindex, nofollow">
-<title>TopMen · 访问验证</title>
-<style>
-:root { --ink: #030916; --gold: #d9a030; --gold-light: #f6d783; --red: #a81c1c; --paper: #f7e6be; }
-* { box-sizing: border-box; }
-html, body { width: 100%; min-height: 100%; margin: 0; }
-body { min-height: 100vh; overflow: hidden; color: #fff7df; background: var(--ink); font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; }
-.cover { min-height: 100vh; display: grid; place-items: center; position: relative; isolation: isolate; padding: 28px; background: radial-gradient(circle at 50% 48%, rgba(217, 160, 48, .17) 0%, rgba(168, 28, 28, .07) 43%, transparent 74%), #020817; }
-.cover::before, .cover::after { content: ""; position: absolute; inset-inline: 0; height: 1px; z-index: -1; background: linear-gradient(90deg, transparent, rgba(217, 160, 48, .45), transparent); }
-.cover::before { top: 0; } .cover::after { bottom: 0; opacity: .5; }
-.stage { width: min(1120px, 100%); text-align: center; }
-.frame { position: relative; aspect-ratio: 2.8 / 1; overflow: hidden; border: 4px solid rgba(154, 120, 55, .7); border-radius: 19px; background: #f7e6be; box-shadow: 0 28px 72px rgba(0,0,0,.58), 0 0 42px rgba(217,160,48,.16); cursor: pointer; transition: transform .24s ease, box-shadow .24s ease; }
-.frame:hover, .frame:focus-visible { transform: scale(1.006); box-shadow: 0 28px 72px rgba(0,0,0,.58), 0 0 54px rgba(217,160,48,.33); outline: none; }
-.cover-art { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
-.art-fallback { min-height: 320px; display: grid; place-items: center; color: #6a1616; background: linear-gradient(180deg, #f7e6be, #dcb164); font-family: serif; font-size: clamp(26px, 6vw, 62px); font-weight: 900; letter-spacing: .16em; }
-.prompt { margin: 25px auto 0; min-height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 22px; border: 1px solid rgba(245, 197, 66, .58); border-radius: 999px; color: #f6d783; background: linear-gradient(90deg, rgba(217,160,48,.13), rgba(217,160,48,.28), rgba(217,160,48,.13)); font-size: 14px; font-weight: 700; letter-spacing: .15em; box-shadow: 0 0 24px rgba(245,197,66,.12); }
-.fineprint { margin: 12px 0 0; color: #98a6bc; font: 12px/1.5 "SFMono-Regular", Consolas, monospace; letter-spacing: .05em; }
-.dialog { display: none; width: min(430px, 100%); margin: 24px auto 0; padding: 25px; border: 1px solid rgba(217,160,48,.45); border-radius: 17px; background: rgba(8, 16, 29, .9); box-shadow: 0 24px 60px rgba(0,0,0,.5); text-align: left; backdrop-filter: blur(18px); }
-.dialog.open { display: block; animation: appear .22s ease; }
-.dialog h1 { margin: 0; color: #fff2cf; font-size: 20px; letter-spacing: .08em; }
-.dialog p { margin: 9px 0 19px; color: #aab6c8; font-size: 13px; line-height: 1.65; }
-.dialog label { display: block; margin: 0 0 8px; color: #eec86e; font-size: 13px; font-weight: 700; }
-.dialog input { width: 100%; height: 46px; padding: 0 13px; border: 1px solid rgba(217,160,48,.48); border-radius: 9px; color: #fff8e5; background: rgba(2, 8, 23, .8); font: 15px "SFMono-Regular", Consolas, monospace; outline: none; }
-.dialog input:focus { border-color: #f6d783; box-shadow: 0 0 0 3px rgba(217,160,48,.16); }
-.dialog button { width: 100%; height: 46px; margin-top: 14px; border: 0; border-radius: 9px; color: #3c0c0c; background: linear-gradient(135deg, #f6d783, #d9a030); font-weight: 800; letter-spacing: .12em; cursor: pointer; }
-.dialog button:hover { filter: brightness(1.06); }
-.error { min-height: 20px; margin: 10px 0 0; color: #ffb4a9; font-size: 13px; }
-@keyframes appear { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@media (max-width: 620px) { .cover { padding: 18px; } .frame { aspect-ratio: 2.1 / 1; border-width: 3px; border-radius: 13px; } .prompt { margin-top: 19px; padding: 9px 15px; font-size: 12px; letter-spacing: .08em; } .dialog { padding: 20px; } }
-</style>
-</head>
-<body>
-<main class="cover">
-  <section class="stage" aria-label="TopMen 访问封面">
-    <div class="frame" id="coverFrame" tabindex="0" role="button" aria-controls="accessDialog" aria-expanded="false">
-      <img class="cover-art" src="/cover-background.jpg" alt="财源广进，八方进财，黄金万两" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'art-fallback', textContent: '八方进财'}))">
-    </div>
-    <button class="prompt" id="openDialog" type="button">点击封面 · 验证口令进入控制台</button>
-    <p class="fineprint">TOPMEN · SEARCH COLLECTION MISSION CONTROL</p>
-    <form class="dialog" id="accessDialog" novalidate>
-      <h1>进入 TopMen 控制台</h1>
-      <p>访问口令只会提交至看板服务端验证，并以浏览器会话方式保存。</p>
-      <label for="accessToken">控制台访问口令</label>
-      <input id="accessToken" type="password" autocomplete="current-password" required autofocus>
-      <button id="submitToken" type="submit">验证并进入看板</button>
-      <div class="error" id="error" role="alert"></div>
-    </form>
-  </section>
-</main>
-<script>
-const dialog = document.getElementById('accessDialog');
-const token = document.getElementById('accessToken');
-function openDialog() { dialog.classList.add('open'); document.getElementById('coverFrame').setAttribute('aria-expanded', 'true'); token.focus(); }
-document.getElementById('openDialog').addEventListener('click', openDialog);
-document.getElementById('coverFrame').addEventListener('click', openDialog);
-document.getElementById('coverFrame').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDialog(); } });
-dialog.addEventListener('submit', async event => {
-  event.preventDefault();
-  const submit = document.getElementById('submitToken');
-  const error = document.getElementById('error');
-  submit.disabled = true; error.textContent = '';
-  try {
-    const response = await fetch('/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token: token.value})});
-    const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(result.error || '验证失败');
-    window.location.replace('/');
-  } catch (exception) { error.textContent = exception.message; token.select(); submit.disabled = false; }
-});
-</script>
-</body>
-</html>
-"""
-
-
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TON MAN 2.0 — 搜索采集看板</title>
-<style>
-:root {
-  --ink: #13233a;
-  --muted: #697586;
-  --surface: #ffffff;
-  --canvas: #edf2f7;
-  --line: #d9e2ec;
-  --primary: #0f766e;
-  --primary-hover: #0b5c56;
-  --danger: #b42318;
-  --danger-hover: #8f1d15;
-  --terminal: #101923;
-  --terminal-text: #dce8f5;
-}
-* { box-sizing: border-box; }
-html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body {
-  height: 100dvh;
-  background: var(--canvas);
-  color: var(--ink);
-  font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
-}
-.header {
-  height: 72px;
-  min-height: 72px;
-  padding: 14px clamp(24px, 4vw, 64px);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  background: var(--ink);
-  color: #fff;
-}
-.header h1 { margin: 0; font-size: clamp(22px, 2vw, 30px); letter-spacing: 0.04em; }
-.status { flex: 0 0 auto; padding: 8px 13px; border: 1px solid rgba(255,255,255,.2); border-radius: 999px; font-size: 13px; }
-.status.idle { color: #d5f5ef; background: rgba(15,118,110,.22); }
-.status.running { color: #ffe7bd; background: rgba(180,83,9,.28); }
-	.dashboard {
-	  position: relative;
-	  isolation: isolate;
-	  height: calc(100dvh - 72px);
-	  min-height: 0;
-	  overflow: hidden;
-	  padding: clamp(14px, 2vw, 28px) clamp(24px, 4vw, 64px);
-	  display: grid;
-	  grid-template-rows: min-content minmax(0, 1fr) auto;
-	  gap: 12px;
-}
-.dashboard::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -2;
-  pointer-events: none;
-  opacity: .24;
-  transform: scale(1.035);
-  background: #eee7dc url('/dashboard-background.jpg') center / cover no-repeat;
-  filter: blur(10px) saturate(.85);
-}
-.dashboard::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: .5;
-  background: url('/dashboard-background.jpg') center / contain no-repeat;
-}
-.dashboard > * { position: relative; z-index: 1; }
-		.config-panel { display: grid; grid-template-columns: minmax(280px, 1.65fr) minmax(230px, .95fr); gap: 10px; min-height: 0; padding: 10px 12px; border: 1px solid rgba(167,139,250,.54); border-radius: 12px; background: rgba(237,233,254,.88); backdrop-filter: blur(6px); box-shadow: 0 10px 24px rgba(76,29,149,.12); }
-	.config-group { min-width: 0; }
-	.config-heading { margin: 0 0 7px; color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
-	.config-meta { margin-left: 7px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: normal; }
-	.province-tools { display: flex; align-items: center; gap: 6px; margin: 0 0 7px; }
-		.tiny-btn { min-height: 25px; padding: 3px 8px; border: 1px solid #c4b5fd; border-radius: 6px; color: #4c1d95; background: rgba(221,214,254,.58); font-size: 11px; font-weight: 700; cursor: pointer; }
-		.tiny-btn:hover:not(:disabled) { border-color: #7c3aed; color: #5b21b6; background: rgba(196,181,253,.72); }
-	.selection-summary { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
-		.province-list { display: grid; grid-auto-flow: column; grid-template-rows: repeat(5, minmax(22px, 1fr)); grid-auto-columns: minmax(82px, 1fr); gap: 5px; max-height: 135px; padding-right: 4px; overflow-x: auto; overflow-y: hidden; }
-	.province-option, .choice-option { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: #334155; font-size: 12px; line-height: 1.2; cursor: pointer; }
-		.province-option { min-height: 22px; padding: 3px 5px; border: 1px solid rgba(196,181,253,.75); border-radius: 6px; background: rgba(237,233,254,.76); }
-		.province-option:has(input:checked) { color: #4c1d95; border-color: rgba(124,58,237,.6); background: rgba(221,214,254,.8); }
-		.config-side { display: grid; grid-template-columns: 1fr; align-content: center; gap: 11px; padding-left: 11px; border-left: 1px solid rgba(167,139,250,.4); }
-	.choice-row { display: flex; flex-wrap: wrap; gap: 7px; }
-		.choice-option { min-height: 28px; padding: 5px 8px; border: 1px solid rgba(196,181,253,.86); border-radius: 7px; background: rgba(237,233,254,.82); }
-		.choice-option:has(input:checked) { color: #4c1d95; border-color: rgba(124,58,237,.68); background: rgba(221,214,254,.86); font-weight: 700; }
-		.config-panel input { accent-color: #7c3aed; }
-	.config-panel input:disabled, .config-panel label:has(input:disabled), .config-panel button:disabled { cursor: not-allowed; opacity: .52; }
-.log-panel {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: rgba(16, 25, 35, .91);
-  border: 1px solid #263849;
-  border-radius: 14px;
-  box-shadow: 0 16px 38px rgba(15, 35, 58, .12);
-}
-.log-title { min-height: 58px; padding: 9px 13px 9px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #9eb5ca; border-bottom: 1px solid #263849; font-size: 13px; letter-spacing: .08em; }
-.log-heading { flex: 1 1 auto; min-width: 0; }
-.log-area { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; color: var(--terminal-text); font-family: "SFMono-Regular", Consolas, monospace; font-size: 14px; line-height: 1.7; }
-.log-area .line { white-space: pre-wrap; word-break: break-word; }
-.actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
-.btn { min-width: 112px; min-height: 38px; padding: 8px 14px; border: 1px solid transparent; border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px; font-weight: 800; letter-spacing: .04em; transition: transform .15s ease, background .15s ease, opacity .15s ease; }
-.btn:hover:not(:disabled) { transform: translateY(-1px); }
-.btn:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }
-.btn:disabled { cursor: not-allowed; opacity: .45; }
-.btn-start { background: var(--primary); }
-.btn-start:hover:not(:disabled) { background: var(--primary-hover); }
-.btn-stop { background: var(--danger); }
-.btn-stop:hover:not(:disabled) { background: var(--danger-hover); }
-	@media (max-width: 720px) {
-	  .header { height: 62px; min-height: 62px; padding: 10px 18px; }
-	  .header h1 { font-size: 21px; }
-		  .dashboard { height: calc(100dvh - 62px); min-height: 0; padding: 10px 14px; gap: 10px; }
-	  .log-panel { height: auto; }
-	  .log-title { min-height: 50px; padding: 7px 9px 7px 13px; gap: 8px; }
-	  .config-panel { grid-template-columns: 1fr; gap: 8px; padding: 9px; }
-	  .config-side { grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; border-left: 0; }
-		  .province-list { grid-auto-flow: row; grid-template-rows: none; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); max-height: 62px; overflow-x: hidden; overflow-y: auto; }
-	  .choice-row { gap: 5px; }
-	  .choice-option { padding: 4px 6px; font-size: 11px; }
-	  .actions { display: flex; gap: 6px; }
-	  .btn { min-width: 82px; min-height: 34px; padding: 7px 9px; font-size: 12px; }
-}
-</style>
-</head>
-<body>
-<header class="header">
-  <div>
-    <h1>TON MAN 2.0</h1>
-  </div>
-  <span class="status idle" id="status">空闲</span>
-</header>
-
-<main class="dashboard">
-	  <section class="config-panel" id="runConfig" aria-label="启动前采集配置">
-	    <div class="config-group">
-	      <p class="config-heading">采集省份 <span class="config-meta">福建已排除</span></p>
-	      <div class="province-tools">
-	        <button class="tiny-btn" id="selectAllProvinces" type="button">全选</button>
-	        <button class="tiny-btn" id="clearProvinces" type="button">清空</button>
-	        <span class="selection-summary" id="provinceSummary">加载中…</span>
-	      </div>
-	      <div class="province-list" id="provinceOptions" role="group" aria-label="选择采集省份"></div>
-	    </div>
-		    <div class="config-side">
-		      <div class="config-group">
-	        <p class="config-heading">年龄范围 <span class="config-meta">4档选择</span></p>
-		        <div class="choice-row" id="ageOptions"></div>
-		      </div>
-		      <div class="config-group">
-	        <p class="config-heading">工资要求 <span class="config-meta">最低月收入</span></p>
-	        <div class="choice-row" id="incomeOptions"></div>
-	      </div>
-	      <div class="config-group">
-	        <p class="config-heading">群推送要求 <span class="config-meta">实名认证时限</span></p>
-	        <div class="choice-row" id="pushWindowOptions"></div>
-	      </div>
-	    </div>
-	  </section>
-
-	  <section class="log-panel" aria-label="采集运行日志">
-	    <div class="log-title">
-	      <span class="log-heading">运行日志</span>
-	      <div class="actions" aria-label="采集控制">
-	        <button class="btn btn-start" id="btnStart" type="button" onclick="startCrawl()">启动采集</button>
-	        <button class="btn btn-stop" id="btnStop" type="button" onclick="stopCrawl()" disabled>暂停采集</button>
-	      </div>
-	    </div>
-    <div class="log-area" id="log"><div class="line">等待启动采集任务…</div></div>
-  </section>
-</main>
-
-<script>
-let eventSource = null;
-let configLoaded = false;
-let currentRunning = false;
-
-function selectedProvinces() {
-  return Array.from(document.querySelectorAll('#provinceOptions input:checked')).map(input => input.value);
-}
-
-function updateProvinceSummary() {
-  const selected = selectedProvinces().length;
-  const total = document.querySelectorAll('#provinceOptions input').length;
-  const valid = selected >= 15;
-  document.getElementById('provinceSummary').textContent = selected + ' / ' + total + ' 个省份 · 至少 15 个';
-  document.getElementById('provinceSummary').style.color = valid ? '' : '#b42318';
-  document.getElementById('btnStart').disabled = currentRunning || !configLoaded || !valid;
-}
-
-function selectedRadioValue(containerId) {
-  const selected = document.querySelector('#' + containerId + ' input:checked');
-  return selected ? Number(selected.value) : null;
-}
-
-function renderRunConfig(data) {
-  const config = data.config || {};
-  const selected = new Set(config.provinces || []);
-  const provinceContainer = document.getElementById('provinceOptions');
-  provinceContainer.replaceChildren();
-  for (const province of data.provinces || []) {
-    const label = document.createElement('label');
-    label.className = 'province-option';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.value = province;
-    input.checked = selected.has(province);
-    input.addEventListener('change', updateProvinceSummary);
-    label.append(input, document.createTextNode(province));
-    provinceContainer.appendChild(label);
-  }
-	  const incomeContainer = document.getElementById('incomeOptions');
-	  const ageContainer = document.getElementById('ageOptions');
-	  ageContainer.replaceChildren();
-	  for (const range of data.age_options || []) {
-	    const label = document.createElement('label');
-	    label.className = 'choice-option';
-	    const input = document.createElement('input');
-	    input.type = 'radio'; input.name = 'ageRange'; input.value = range[0] + '-' + range[1];
-	    input.dataset.begin = range[0]; input.dataset.end = range[1];
-	    input.checked = Number(config.age_begin) === Number(range[0]) && Number(config.age_end) === Number(range[1]);
-	    label.append(input, document.createTextNode(range[0] + '–' + range[1] + '岁'));
-	    ageContainer.appendChild(label);
-	  }
-
-
-
-  incomeContainer.replaceChildren();
-  for (const income of data.income_options || []) {
-    const label = document.createElement('label');
-    label.className = 'choice-option';
-    const input = document.createElement('input');
-    input.type = 'radio'; input.name = 'minimumIncome'; input.value = income;
-    input.checked = Number(config.minimum_income) === Number(income);
-    label.append(input, document.createTextNode(Number(income) === 0 ? '不限（0）' : income + ' 元+'));
-    incomeContainer.appendChild(label);
-  }
-  const windowContainer = document.getElementById('pushWindowOptions');
-  windowContainer.replaceChildren();
-  for (const hours of data.push_window_options || []) {
-    const label = document.createElement('label');
-    label.className = 'choice-option';
-    const input = document.createElement('input');
-    input.type = 'radio'; input.name = 'pushWindowHours'; input.value = hours;
-    input.checked = Number(config.push_window_hours) === Number(hours);
-    label.append(input, document.createTextNode(hours + ' 小时'));
-    windowContainer.appendChild(label);
-  }
-  configLoaded = true;
-  updateProvinceSummary();
-  setRunning(currentRunning);
-}
-
-document.getElementById('selectAllProvinces').addEventListener('click', () => {
-  document.querySelectorAll('#provinceOptions input').forEach(input => { input.checked = true; });
-  updateProvinceSummary();
-});
-document.getElementById('clearProvinces').addEventListener('click', () => {
-  document.querySelectorAll('#provinceOptions input').forEach(input => { input.checked = false; });
-  updateProvinceSummary();
-});
-
-function log(message) {
-  const line = document.createElement('div');
-  line.className = 'line';
-  line.textContent = message;
-  const logEl = document.getElementById('log');
-  logEl.appendChild(line);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function setRunning(running) {
-  currentRunning = running;
-  document.getElementById('btnStart').disabled = running || !configLoaded || selectedProvinces().length < 15;
-  document.getElementById('btnStop').disabled = !running;
-  document.querySelectorAll('#runConfig input, #runConfig button').forEach(element => { element.disabled = running; });
-  const status = document.getElementById('status');
-  status.textContent = running ? '运行中' : '空闲';
-  status.className = 'status ' + (running ? 'running' : 'idle');
-}
-
-function closeStream() {
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
-  }
-}
-
-function connectStream() {
-  closeStream();
-  eventSource = new EventSource('/stream');
-  eventSource.onmessage = event => {
-    const data = JSON.parse(event.data);
-    if (data.done) {
-      log('采集任务已结束');
-      closeStream();
-      setRunning(false);
-    } else if (data.msg) {
-      log(data.msg);
-    }
-  };
-  eventSource.onerror = () => {
-    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
-      fetch('/status').then(response => response.json()).then(status => {
-        setRunning(status.running);
-        if (status.running) setTimeout(connectStream, 1000);
-        else closeStream();
-      }).catch(() => {});
-    }
-  };
-}
-
-async function startCrawl() {
-  const config = {
-    provinces: selectedProvinces(),
-    minimum_income: selectedRadioValue('incomeOptions'),
-    push_window_hours: selectedRadioValue('pushWindowOptions'),
-    age_begin: Number(document.querySelector('#ageOptions input:checked')?.dataset.begin),
-    age_end: Number(document.querySelector('#ageOptions input:checked')?.dataset.end),
-  };
-  if (config.provinces.length < 15) {
-    log('无法启动：请至少选择 15 个省份。');
-    return;
-  }
-  try {
-    const response = await fetch('/start', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(config),
-    });
-    const result = await response.json();
-    if (!result.ok) {
-      log('无法启动：' + result.msg);
-      return;
-    }
-    document.getElementById('log').replaceChildren();
-    setRunning(true);
-    log('已发送启动请求');
-    connectStream();
-  } catch (error) {
-    log('启动请求失败：' + error.message);
-  }
-}
-
-async function stopCrawl() {
-  try {
-    const response = await fetch('/stop', { method: 'POST' });
-    const result = await response.json();
-    if (result.ok) log('已请求暂停，正在安全结束当前任务…');
-  } catch (error) {
-    log('暂停请求失败：' + error.message);
-  }
-}
-
-fetch('/api/run-config').then(response => {
-  if (!response.ok) throw new Error('无法读取启动配置');
-  return response.json();
-}).then(renderRunConfig).catch(error => log('配置加载失败：' + error.message));
-fetch('/status').then(response => response.json()).then(status => {
-  setRunning(status.running);
-  if (status.running) connectStream();
-});
-</script>
-</body>
-</html>
-"""
-
-
 def start_background_threads():
     threading.Thread(target=tg_daily_push_reporter, daemon=True, name="tg-daily-push-reporter").start()
     threading.Thread(target=group_push_reporter, daemon=True, name="tg-profile-card-reporter").start()
@@ -2397,5 +1753,6 @@ if __name__ == "__main__":
     init_db()
     migrate_legacy_files()
     start_background_threads()
-    print("🚀 TON MAN 2.0 单文件服务启动 → http://localhost:7860")
-    app.run(host="0.0.0.0", port=7860, debug=False, threaded=True)
+    print("🚀 TON MAN 2.0 Telegram 采集服务启动（看板已关闭，无HTTP端口）", flush=True)
+    while True:
+        time.sleep(3600)
