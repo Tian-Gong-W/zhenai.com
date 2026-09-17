@@ -1702,6 +1702,65 @@ def install_group_command_menu():
         emit(f"群控制菜单注册失败：{type(error).__name__}")
 
 
+def chat_ids_match(id_a, id_b):
+    sa = str(id_a or "").strip()
+    sb = str(id_b or "").strip()
+    if not sa or not sb:
+        return False
+    if sa == sb:
+        return True
+    clean_a = sa.lstrip("-").removeprefix("100")
+    clean_b = sb.lstrip("-").removeprefix("100")
+    return bool(clean_a and clean_b and clean_a == clean_b)
+
+
+def parse_control_command(text):
+    """Parse text into (action, target_chat_id)."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None, None
+    tokens = raw.split()
+    first_token = tokens[0]
+    if "@" in first_token:
+        first_token, mention = first_token.split("@", 1)
+        bot_username = TG_BOT_USERNAME.lstrip("@").lower()
+        if bot_username and mention.lower() != bot_username:
+            return None, None
+
+    target_chat_id = None
+    cmd_name = first_token.lower()
+
+    if len(tokens) > 1:
+        potential_id = tokens[1].strip()
+        if re.fullmatch(r"-?\d{6,20}", potential_id):
+            target_chat_id = potential_id
+
+    if not target_chat_id:
+        m = re.match(r"^([^\d-]+)(-?\d{6,20})$", cmd_name)
+        if m:
+            cmd_name = m.group(1).rstrip("-")
+            target_chat_id = m.group(2)
+
+    cmd_clean = cmd_name.lstrip("/")
+    action = None
+    if cmd_clean in {
+        "start", "start_collect", "启动", "群启动", "开启", "开启采集", "开始采集", "开始",
+    }:
+        action = "start"
+    elif cmd_clean in {
+        "stop", "stop_collect", "停止", "群停止", "关闭", "群关闭", "暂停", "暂停采集", "关闭采集", "停止采集",
+    }:
+        action = "stop"
+    elif cmd_clean in {"status", "状态", "群状态"}:
+        action = "status"
+    elif cmd_clean in {"stats", "统计", "群统计"}:
+        action = "stats"
+    elif cmd_clean in {"help", "菜单", "帮助"}:
+        action = "help"
+
+    return action, target_chat_id
+
+
 def group_command_name(text):
     """Normalize Telegram group commands, including /command@bot syntax."""
     command = str(text or "").strip().split(maxsplit=1)[0].lower()
@@ -1716,7 +1775,7 @@ def group_command_name(text):
 def group_control_authorized(chat, sender):
     if chat.get("type") not in {"group", "supergroup"}:
         return False
-    if str(chat.get("id", "")) != str(GROUP_CHAT_ID):
+    if not chat_ids_match(chat.get("id", ""), GROUP_CHAT_ID):
         return False
     if not TG_GROUP_CONTROL_USER_ID:
         return False
@@ -1726,13 +1785,13 @@ def group_control_authorized(chat, sender):
 
 def group_control_help():
     return "\n".join((
-        "🤖 【大海·新加坡】群控制菜单", "━━━━━━━━━━",
-        "/start_dahai 或 大海启动 — 启动大海采集",
-        "/stop_dahai 或 大海关闭 — 暂停大海采集",
-        "/status_dahai 或 大海状态 — 查看大海状态",
-        "/stats_dahai 或 大海统计 — 查看大海统计",
-        "全局指令：/start_collect 启动、/stop_collect 暂停",
-        "━━━━━━━━━━", "仅授权管理员可操作。",
+        f"🤖 {INSTANCE_TAG}群控制菜单", "━━━━━━━━━━",
+        "• 启动：发送「启动」或「/start_collect」",
+        "• 停止：发送「停止」或「关闭」或「/stop_collect」",
+        "• 指定群ID：发送「启动 <群ID>」或「停止 <群ID>」",
+        "• 状态：发送「状态」或「/status」",
+        "• 统计：发送「统计」或「/stats」",
+        "━━━━━━━━━━", f"当前绑定群：{GROUP_CHAT_ID}，仅授权管理员可操作。",
     ))
 
 
@@ -1760,46 +1819,36 @@ def telegram_control_reporter():
                 if not group_control_authorized(chat, sender):
                     continue
                 raw_text = str(message.get("text", "") or "").strip()
-                command = group_command_name(raw_text)
-                if not command:
+                action, target_chat_id = parse_control_command(raw_text)
+                if not action:
                     continue
+
+                # 如果指令指定了目标群ID，仅在目标群ID与本实例 GROUP_CHAT_ID 匹配时才执行
+                if target_chat_id and not chat_ids_match(target_chat_id, GROUP_CHAT_ID):
+                    continue
+
                 reply_chat = str(chat.get("id", ""))
-
-                # 若指令明确指定老鹰且未提及大海，则大海不响应
-                raw_lower = raw_text.lower()
-                if any(k in raw_lower for k in ("laoying", "老鹰")) and not any(k in raw_lower for k in ("dahai", "大海")):
-                    continue
-
-                if command in {
-                    "/start", "/start_collect", "/start_dahai", "/start_collect_dahai",
-                    "/开启采集", "开启采集", "/启动", "启动", "群启动", "开启", "开始采集",
-                    "大海启动", "启动大海", "大海开启", "开启大海",
-                }:
+                if action == "start":
                     with start_lock:
                         ok, detail = _launch_crawl()
                     filters = get_run_filter_config()
                     provinces = "、".join(filters["provinces"])
                     telegram_control_reply(
                         reply_chat,
-                        f"【大海】✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
-                        if ok else f"【大海】⚠️ 启动失败：{detail}",
+                        f"{INSTANCE_TAG}✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
+                        if ok else f"{INSTANCE_TAG}⚠️ 启动失败：{detail}",
                     )
-                elif command in {
-                    "/stop", "/stop_collect", "/stop_dahai", "/stop_collect_dahai",
-                    "/暂停采集", "/关闭采集", "暂停采集", "关闭采集", "/关闭", "关闭",
-                    "群关闭", "/停止", "停止", "群停止", "/暂停", "暂停", "停止采集",
-                    "大海关闭", "关闭大海", "大海停止", "停止大海", "大海暂停", "暂停大海",
-                }:
+                elif action == "stop":
                     cancel_auto_restart()
                     set_state("crawl_intent", "stopped")
                     manual_stop_requested.set()
                     crawl_running.clear()
-                    telegram_control_reply(reply_chat, "【大海】⏹️ 已发送暂停请求，自动循环已取消。")
-                elif command in {"/status", "/status_dahai", "/状态", "状态", "大海状态"}:
-                    telegram_control_reply(reply_chat, f"【大海】\n{format_runtime_status()}")
-                elif command in {"/stats", "/stats_dahai", "/统计", "统计", "大海统计"}:
-                    telegram_control_reply(reply_chat, f"【大海】\n{format_group_stats_report()}")
-                elif command in {"/help", "/help_dahai", "/菜单", "菜单", "帮助", "大海菜单"}:
+                    telegram_control_reply(reply_chat, f"{INSTANCE_TAG}⏹️ 已发送暂停请求，自动循环已取消。")
+                elif action == "status":
+                    telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_runtime_status()}")
+                elif action == "stats":
+                    telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_group_stats_report()}")
+                elif action == "help":
                     telegram_control_reply(reply_chat, group_control_help())
         except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as error:
             emit(f"Telegram 群控制检查失败：{type(error).__name__}")
