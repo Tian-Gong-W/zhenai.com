@@ -26,6 +26,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR = os.environ.get("ZHENAI_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "zhenai.db")
+INSTANCE_NAME = "laoying"
+INSTANCE_LABEL = "老鹰（美国）"
+INSTANCE_TAG = "【老鹰】"
 
 
 def load_local_env(env_path):
@@ -369,6 +372,11 @@ def upsert_member_record(record):
         )
 
 
+def upsert_member(record):
+    """Compatibility alias for instance split tests."""
+    return upsert_member_record(record)
+
+
 def migrate_legacy_files():
     """Import previous CSV and state files exactly once before legacy files are archived."""
     if get_state("legacy_migration_complete") == "1":
@@ -572,18 +580,26 @@ class ZhenaiCrawler:
             print(f"    获取 {object_id} 动态网络异常: {e}")
         return []
 
-    def has_purple_panel(self, cert_ts, now=None):
+    def has_purple_panel(self, cert_ts, moments=None, now=None):
         """
-        紫图可见（新判定）：
-        只需要实名认证时间落在「当前实时时间向前 48 小时」窗口内即为是。
-        有没有动态都不影响判定；48 小时外一律判否。
+        紫图可见判定：
+        实名认证时间落在「当前时间向前 48 小时」窗口内，且在窗口前无日常生活动态。
         """
         if not cert_ts:
             return False
         reference_now = time.time() if now is None else float(now)
         certification_seconds = float(cert_ts) / 1000
         window_start = reference_now - CERTIFICATION_WINDOW_HOURS * 3600
-        return window_start <= certification_seconds <= reference_now
+        if not (window_start <= certification_seconds <= reference_now):
+            return False
+        if moments:
+            for item in moments:
+                moment_obj = item.get("moment") or {}
+                m_type = moment_obj.get("type")
+                create_ts = (moment_obj.get("createTime") or 0) / 1000
+                if m_type in (0, 1) and create_ts < window_start:
+                    return False
+        return True
 
     def parse_moments_times(self, moments, object_id=None, check_purple=True):
         """解析动态时间（最新、实名认证、最早）+ 紫图资格。"""
@@ -606,7 +622,7 @@ class ZhenaiCrawler:
 
         has_recent = False
         if check_purple and cert_ts > 0:
-            has_recent = self.has_purple_panel(cert_ts)
+            has_recent = self.has_purple_panel(cert_ts, moments=moments)
 
         earliest = fmt(moments[-1].get("moment", {}).get("createTime")) if not cert else ""
         return latest, cert, earliest, has_recent
@@ -1688,27 +1704,31 @@ def group_command_name(text):
     command = str(text or "").strip().split(maxsplit=1)[0].lower()
     if "@" in command:
         command, mention = command.split("@", 1)
-        if mention != TG_BOT_USERNAME.lower():
+        bot_username = TG_BOT_USERNAME.lstrip("@").lower()
+        if bot_username and mention != bot_username:
             return ""
     return command
 
 
 def group_control_authorized(chat, sender):
-    return (
-        chat.get("type") in {"group", "supergroup"}
-        and str(chat.get("id", "")) == str(GROUP_CHAT_ID)
-        and bool(TG_GROUP_CONTROL_USER_ID)
-        and str(sender.get("id", "")) == str(TG_GROUP_CONTROL_USER_ID)
-    )
+    if chat.get("type") not in {"group", "supergroup"}:
+        return False
+    if str(chat.get("id", "")) != str(GROUP_CHAT_ID):
+        return False
+    if not TG_GROUP_CONTROL_USER_ID:
+        return False
+    authorized_ids = {uid.strip() for uid in str(TG_GROUP_CONTROL_USER_ID).split(",") if uid.strip()}
+    return str(sender.get("id", "")) in authorized_ids
 
 
 def group_control_help():
     return "\n".join((
-        "🤖 群控制菜单", "━━━━━━━━━━",
-        "/start_collect — 启动采集",
-        "/stop_collect — 暂停采集并取消自动循环",
-        "/status — 查看当前状态",
-        "/stats — 查看推送统计",
+        "🤖 【老鹰·美国】群控制菜单", "━━━━━━━━━━",
+        "/start_laoying 或 老鹰启动 — 启动老鹰采集",
+        "/stop_laoying 或 老鹰关闭 — 暂停老鹰采集",
+        "/status_laoying 或 老鹰状态 — 查看老鹰状态",
+        "/stats_laoying 或 老鹰统计 — 查看老鹰统计",
+        "全局指令：/start_collect 启动、/stop_collect 暂停",
         "━━━━━━━━━━", "仅授权管理员可操作。",
     ))
 
@@ -1736,29 +1756,47 @@ def telegram_control_reporter():
                 sender = message.get("from") or {}
                 if not group_control_authorized(chat, sender):
                     continue
-                command = group_command_name(message.get("text", ""))
+                raw_text = str(message.get("text", "") or "").strip()
+                command = group_command_name(raw_text)
+                if not command:
+                    continue
                 reply_chat = str(chat.get("id", ""))
-                if command in {"/start", "/start_collect", "/开启采集"}:
+
+                # 若指令明确指定大海且未提及老鹰，则老鹰不响应
+                raw_lower = raw_text.lower()
+                if any(k in raw_lower for k in ("dahai", "大海")) and not any(k in raw_lower for k in ("laoying", "老鹰")):
+                    continue
+
+                if command in {
+                    "/start", "/start_collect", "/start_laoying", "/start_collect_laoying",
+                    "/开启采集", "开启采集", "/启动", "启动", "群启动", "开启", "开始采集",
+                    "老鹰启动", "启动老鹰", "老鹰开启", "开启老鹰",
+                }:
                     with start_lock:
                         ok, detail = _launch_crawl()
                     filters = get_run_filter_config()
                     provinces = "、".join(filters["provinces"])
                     telegram_control_reply(
                         reply_chat,
-                        f"✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
-                        if ok else f"⚠️ 启动失败：{detail}",
+                        f"【老鹰】✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
+                        if ok else f"【老鹰】⚠️ 启动失败：{detail}",
                     )
-                elif command in {"/stop", "/stop_collect", "/暂停采集", "/关闭采集"}:
+                elif command in {
+                    "/stop", "/stop_collect", "/stop_laoying", "/stop_collect_laoying",
+                    "/暂停采集", "/关闭采集", "暂停采集", "关闭采集", "/关闭", "关闭",
+                    "群关闭", "/停止", "停止", "群停止", "/暂停", "暂停", "停止采集",
+                    "老鹰关闭", "关闭老鹰", "老鹰停止", "停止老鹰", "老鹰暂停", "暂停老鹰",
+                }:
                     cancel_auto_restart()
                     set_state("crawl_intent", "stopped")
                     manual_stop_requested.set()
                     crawl_running.clear()
-                    telegram_control_reply(reply_chat, "⏹️ 已发送暂停请求，自动循环已取消。")
-                elif command in {"/status", "/状态"}:
-                    telegram_control_reply(reply_chat, format_runtime_status())
-                elif command in {"/stats", "/统计"}:
-                    telegram_control_reply(reply_chat, format_group_stats_report())
-                elif command in {"/help", "/菜单"}:
+                    telegram_control_reply(reply_chat, "【老鹰】⏹️ 已发送暂停请求，自动循环已取消。")
+                elif command in {"/status", "/status_laoying", "/状态", "状态", "老鹰状态"}:
+                    telegram_control_reply(reply_chat, f"【老鹰】\n{format_runtime_status()}")
+                elif command in {"/stats", "/stats_laoying", "/统计", "统计", "老鹰统计"}:
+                    telegram_control_reply(reply_chat, f"【老鹰】\n{format_group_stats_report()}")
+                elif command in {"/help", "/help_laoying", "/菜单", "菜单", "帮助", "老鹰菜单"}:
                     telegram_control_reply(reply_chat, group_control_help())
         except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as error:
             emit(f"Telegram 群控制检查失败：{type(error).__name__}")
