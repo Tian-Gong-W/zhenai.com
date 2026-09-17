@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Dahai service: dedicated Singapore crawler, dashboard, and Telegram bot.
+"""TON MAN 2.0 single-file service.
 
-This file belongs only to the Singapore instance. Runtime state is local SQLite data;
-credentials and Singapore-specific settings remain in the local .env file.
+This file contains the nationwide city crawler, dashboard, Telegram status reporting,
+Telegram profile-card pushes, and all persistence logic. Runtime state is kept only in
+SQLite; credentials remain in .env.
 """
 
 import csv
@@ -12,7 +13,6 @@ import io
 import json
 import os
 import queue
-import random
 import re
 import sqlite3
 import sys
@@ -31,7 +31,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR = os.environ.get("ZHENAI_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "zhenai.db")
-INSTANCE_NAME = "dahai"
 
 
 def load_local_env(env_path):
@@ -81,7 +80,7 @@ def _env_list(name, default):
 
 
 DEFAULT_SEARCH_CONFIG = {
-    "provinces": _env_list("SEARCH_PROVINCES", ["上海", "云南", "北京", "四川", "天津", "安徽", "山东", "山西", "广东", "江西", "河北", "河南", "浙江", "海南", "湖北", "湖南", "重庆", "陕西"]),
+    "provinces": _env_list("SEARCH_PROVINCES", ["广东", "山东"]),
     "age_begin": _env_int("SEARCH_AGE_BEGIN", 40),
     "age_end": _env_int("SEARCH_AGE_END", 65),
     "gender": "女",
@@ -91,17 +90,16 @@ DEFAULT_SEARCH_CONFIG = {
     "income_filter": "",
     "education_filter": "",
     "marriage_filter": "",
-    "cert_days": 2,
+    "cert_days": 3,
 }
 EXCLUDED_PROVINCES = {"福建"}
-REPORT_INTERVAL_SECONDS = 30 * 60
-PUSH_INTERVAL_SECONDS = 3 * 60
+PUSH_INTERVAL_SECONDS = 60
 CRAWL_DELAY_SECONDS = 0.5
-CARD_TTL_DAYS = 0
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 CERTIFICATION_WINDOW_HOURS = 48
 AUTO_RESTART_DELAY_SECONDS = _env_int("AUTO_RESTART_DELAY_SECONDS", 30 * 60)
 AUTO_RESTART_ENABLED = os.environ.get("AUTO_RESTART_ENABLED", "1") != "0"
+SCRAPED_IDS_FILE = os.path.join(BASE_DIR, "scraped_ids.txt")
 FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -110,814 +108,130 @@ FONT_CANDIDATES = (
 )
 
 CITY_CODE_MAP = {
-    # 北京
-    '朝阳区': 10102005,
-    '海淀区': 10102008,
-    '丰台区': 10102006,
-    '昌平区': 10102013,
-    '通州区': 10102011,
-    '大兴区': 10102014,
-    '西城区': 10102002,
-    '房山区': 10102010,
-    '顺义区': 10102012,
-    '东城区': 10102001,
-    '石景山区': 10102007,
-    '怀柔区': 10102015,
-    '门头沟区': 10102009,
-    '密云区': 10102017,
-    '延庆区': 10102018,
-    '平谷区': 10102016,
-    # 上海
-    '闸北区': 10103005,
-    '黄浦区': 10103008,
-    '徐汇区': 10103002,
-    '浦东新区': 10103001,
-    '闵行区': 10103012,
-    '宝山区': 10103011,
-    '松江区': 10103015,
-    '嘉定区': 10103013,
-    '杨浦区': 10103007,
-    '普陀区': 10103004,
-    '青浦区': 10103016,
-    '奉贤区': 10103018,
-    '静安区': 10103010,
-    '虹口区': 10103006,
-    '金山区': 10103014,
-    '长宁区': 10103003,
+    '朝阳区': 10102005, '海淀区': 10102008, '丰台区': 10102006, '昌平区': 10102013,
+    '通州区': 10102011, '大兴区': 10102014, '西城区': 10102002, '房山区': 10102010,
+    '顺义区': 10102012, '东城区': 10102001, '石景山区': 10102007, '怀柔区': 10102015,
+    '门头沟区': 10102009, '密云区': 10102017, '延庆区': 10102018, '平谷区': 10102016,
+    '闸北区': 10103005, '黄浦区': 10103008, '徐汇区': 10103002, '浦东新区': 10103001,
+    '闵行区': 10103012, '宝山区': 10103011, '松江区': 10103015, '嘉定区': 10103013,
+    '杨浦区': 10103007, '普陀区': 10103004, '青浦区': 10103016, '奉贤区': 10103018,
+    '静安区': 10103010, '虹口区': 10103006, '金山区': 10103014, '长宁区': 10103003,
     '崇明区': 10103017,
-    # 广东
-    '广州': 10101002,
-    '深圳': 10101201,
-    '佛山': 10101003,
-    '湛江': 10101004,
-    '珠海': 10101005,
-    '肇庆': 10101006,
-    '东莞': 10101007,
-    '惠州': 10101008,
-    '中山': 10101011,
-    '茂名': 10101012,
-    '汕头': 10101013,
-    '梅州': 10101014,
-    '韶关': 10101015,
-    '江门': 10101016,
-    '清远': 10101018,
-    '潮州': 10101020,
-    '阳江': 10101022,
-    '河源': 10101023,
-    '揭阳': 10101026,
-    '汕尾': 10101028,
+    '广州': 10101002, '深圳': 10101201, '佛山': 10101003, '湛江': 10101004,
+    '珠海': 10101005, '肇庆': 10101006, '东莞': 10101007, '惠州': 10101008,
+    '中山': 10101011, '茂名': 10101012, '汕头': 10101013, '梅州': 10101014,
+    '韶关': 10101015, '江门': 10101016, '清远': 10101018, '潮州': 10101020,
+    '阳江': 10101022, '河源': 10101023, '揭阳': 10101026, '汕尾': 10101028,
     '云浮': 10101068,
-    # 天津
-    '和平区': 10104008,
-    '河东区': 10104009,
-    '河西区': 10104010,
-    '南开区': 10104011,
-    '河北区': 10104012,
-    '红桥区': 10104013,
-    '东丽区': 10104017,
-    '西青区': 10104018,
-    '滨海新区': 10104014,
-    '津南区': 10104020,
-    '武清区': 10104002,
-    '宝坻区': 10104005,
-    '静海区': 10104006,
-    '宁河区': 10104003,
-    '北辰区': 10104019,
-    '蓟州区': 10104007,
-    # 重庆
-    '渝中区': 10105034,
-    '渝北区': 10105040,
-    '合川区': 10105013,
-    '九龙坡区': 10105037,
-    '沙坪坝区': 10105036,
-    '永川区': 10105007,
-    '巴南区': 10105041,
-    '南岸区': 10105038,
-    '江北区': 10105026,
-    '北碚区': 10105024,
-    '璧山区': 10105025,
-    '大渡口区': 10105035,
-    '万州区': 10105042,
-    '开州区': 10105006,
-    '梁平区': 10105021,
-    '黔江区': 10105018,
-    '武隆区': 10105003,
-    '江津区': 10105029,
-    '涪陵区': 10105028,
-    '綦江区': 10105033,
-    '大足区': 10105023,
-    '长寿区': 10105016,
-    '荣昌区': 10105008,
-    '铜梁区': 10105010,
-    '潼南区': 10105027,
-    '南川区': 10105015,
-    '云阳县': 10105019,
-    '奉节县': 10105002,
-    '忠县': 10105004,
-    '垫江县': 10105020,
-    '丰都县': 10105030,
-    '巫山县': 10105005,
-    '巫溪县': 10105017,
-    '城口县': 10105032,
-    '石柱土家族自治县': 10105012,
-    '酉阳土家族苗族自治县': 10105044,
-    '彭水苗族土家族自治县': 10105045,
+    '和平区': 10104008, '河东区': 10104009, '河西区': 10104010, '南开区': 10104011,
+    '河北区': 10104012, '红桥区': 10104013, '东丽区': 10104017, '西青区': 10104018,
+    '滨海新区': 10104014, '津南区': 10104020, '武清区': 10104002, '宝坻区': 10104005,
+    '静海区': 10104006, '宁河区': 10104003, '北辰区': 10104019, '蓟州区': 10104007,
+    '渝中区': 10105034, '渝北区': 10105040, '合川区': 10105013, '九龙坡区': 10105037,
+    '沙坪坝区': 10105036, '永川区': 10105007, '巴南区': 10105041, '南岸区': 10105038,
+    '江北区': 10105026, '北碚区': 10105024, '璧山区': 10105025, '大渡口区': 10105035,
+    '万州区': 10105042, '开州区': 10105006, '梁平区': 10105021, '黔江区': 10105018,
+    '武隆区': 10105003, '江津区': 10105029, '涪陵区': 10105028, '綦江区': 10105033,
+    '大足区': 10105023, '长寿区': 10105016, '荣昌区': 10105008, '铜梁区': 10105010,
+    '潼南区': 10105027, '南川区': 10105015, '云阳县': 10105019, '奉节县': 10105002,
+    '忠县': 10105004, '垫江县': 10105020, '丰都县': 10105030, '巫山县': 10105005,
+    '巫溪县': 10105017, '城口县': 10105032, '石柱土家族自治县': 10105012,
+    '酉阳土家族苗族自治县': 10105044, '彭水苗族土家族自治县': 10105045,
     '秀山土家族苗族自治县': 10105043,
-    # 安徽
-    '合肥': 10106001,
-    '淮南': 10106002,
-    '蚌埠': 10106003,
-    '宿州': 10106004,
-    '阜阳': 10106005,
-    '六安': 10106006,
-    '滁州': 10106008,
-    '芜湖': 10106009,
-    '安庆': 10106011,
-    '黄山': 10106012,
-    '铜陵': 10106013,
-    '淮北': 10106042,
-    '亳州': 10106072,
-    '马鞍山': 10106075,
-    '池州': 10106079,
-    '宣城': 10106080,
-    # 甘肃
-    '兰州': 10108001,
-    '张掖': 10108002,
-    '武威': 10108003,
-    '酒泉': 10108004,
-    '金昌': 10108006,
-    '天水': 10108007,
-    '定西': 10108008,
-    '平凉': 10108009,
-    '甘南': 10108012,
-    '嘉峪关': 10108023,
-    '庆阳': 10108064,
-    '白银': 10108078,
-    '陇南': 10108084,
-    '临夏': 10108085,
-    # 广西
-    '南宁': 10109001,
-    '柳州': 10109002,
-    '钦州': 10109003,
-    '百色': 10109004,
-    '玉林': 10109005,
-    '防城港': 10109006,
-    '桂林': 10109007,
-    '梧州': 10109008,
-    '河池': 10109009,
-    '北海': 10109010,
-    '贵港': 10109014,
-    '来宾': 10109018,
-    '崇左': 10109083,
-    '贺州': 10109089,
-    # 贵州
-    '贵阳': 10110001,
-    '六盘水': 10110002,
-    '安顺': 10110006,
-    '遵义': 10110007,
-    '毕节': 10110021,
-    '铜仁': 10110055,
-    '黔西南布依族苗族自治州': 10110082,
-    '黔东南苗族侗族自治州': 10110083,
-    '黔南布依族苗族自治州': 10110084,
-    # 海南
-    '海口': 10111001,
-    '三亚': 10111002,
-    '省直辖县级': 10111022,
-    # 河北
-    '石家庄': 10112001,
-    '衡水': 10112002,
-    '邢台': 10112003,
-    '邯郸': 10112004,
-    '沧州': 10112005,
-    '唐山': 10112006,
-    '廊坊': 10112007,
-    '秦皇岛': 10112008,
-    '承德': 10112009,
-    '保定': 10112010,
-    '张家口': 10112011,
-    # 河南
-    '郑州': 10113001,
-    '新乡': 10113002,
-    '安阳': 10113003,
-    '许昌': 10113004,
-    '驻马店': 10113005,
-    '漯河': 10113006,
-    '信阳': 10113007,
-    '周口': 10113008,
-    '洛阳': 10113009,
-    '平顶山': 10113010,
-    '三门峡': 10113011,
-    '南阳': 10113012,
-    '开封': 10113013,
-    '商丘': 10113014,
-    '鹤壁': 10113015,
-    '濮阳': 10113016,
-    '焦作': 10113017,
-    '河南省直辖县级': 10113126,
-    # 湖北
-    '武汉': 10115001,
-    '黄石': 10115002,
-    '鄂州': 10115004,
-    '咸宁': 10115006,
-    '十堰': 10115007,
-    '宜昌': 10115008,
-    '恩施': 10115009,
-    '荆州': 10115010,
-    '黄冈': 10115011,
-    '荆门': 10115012,
-    '孝感': 10115013,
-    '襄阳': 10115014,
-    '随州': 10115062,
-    '湖北省直辖县级': 10115085,
-    # 湖南
-    '长沙': 10116001,
-    '株洲': 10116002,
-    '益阳': 10116003,
-    '岳阳': 10116004,
-    '常德': 10116005,
-    '娄底': 10116007,
-    '怀化': 10116008,
-    '衡阳': 10116009,
-    '邵阳': 10116010,
-    '郴州': 10116011,
-    '张家界': 10116013,
-    '湘潭': 10116014,
-    '永州': 10116075,
-    '湘西土家族苗族自治州': 10116097,
-    # 江苏
-    '南京': 10118001,
-    '苏州': 10118002,
-    '无锡': 10118003,
-    '徐州': 10118004,
-    '常州': 10118005,
-    '镇江': 10118006,
-    '连云港': 10118007,
-    '盐城': 10118009,
-    '扬州': 10118010,
-    '南通': 10118011,
-    '淮安': 10118016,
-    '泰州': 10118051,
+    '合肥': 10106001, '淮南': 10106002, '蚌埠': 10106003, '宿州': 10106004,
+    '阜阳': 10106005, '六安': 10106006, '滁州': 10106008, '芜湖': 10106009,
+    '安庆': 10106011, '黄山': 10106012, '铜陵': 10106013, '淮北': 10106042,
+    '亳州': 10106072, '马鞍山': 10106075, '池州': 10106079, '宣城': 10106080,
+    '兰州': 10108001, '张掖': 10108002, '武威': 10108003, '酒泉': 10108004,
+    '金昌': 10108006, '天水': 10108007, '定西': 10108008, '平凉': 10108009,
+    '甘南': 10108012, '嘉峪关': 10108023, '庆阳': 10108064, '白银': 10108078,
+    '陇南': 10108084, '临夏': 10108085,
+    '南宁': 10109001, '柳州': 10109002, '钦州': 10109003, '百色': 10109004,
+    '玉林': 10109005, '防城港': 10109006, '桂林': 10109007, '梧州': 10109008,
+    '河池': 10109009, '北海': 10109010, '贵港': 10109014, '来宾': 10109018,
+    '崇左': 10109083, '贺州': 10109089,
+    '贵阳': 10110001, '六盘水': 10110002, '安顺': 10110006, '遵义': 10110007,
+    '毕节': 10110021, '铜仁': 10110055, '黔西南布依族苗族自治州': 10110082,
+    '黔东南苗族侗族自治州': 10110083, '黔南布依族苗族自治州': 10110084,
+    '海口': 10111001, '三亚': 10111002, '省直辖县级': 10111022,
+    '石家庄': 10112001, '衡水': 10112002, '邢台': 10112003, '邯郸': 10112004,
+    '沧州': 10112005, '唐山': 10112006, '廊坊': 10112007, '秦皇岛': 10112008,
+    '承德': 10112009, '保定': 10112010, '张家口': 10112011,
+    '郑州': 10113001, '新乡': 10113002, '安阳': 10113003, '许昌': 10113004,
+    '驻马店': 10113005, '漯河': 10113006, '信阳': 10113007, '周口': 10113008,
+    '洛阳': 10113009, '平顶山': 10113010, '三门峡': 10113011, '南阳': 10113012,
+    '开封': 10113013, '商丘': 10113014, '鹤壁': 10113015, '濮阳': 10113016,
+    '焦作': 10113017, '河南省直辖县级': 10113126,
+    '武汉': 10115001, '黄石': 10115002, '鄂州': 10115004, '咸宁': 10115006,
+    '十堰': 10115007, '宜昌': 10115008, '恩施': 10115009, '荆州': 10115010,
+    '黄冈': 10115011, '荆门': 10115012, '孝感': 10115013, '襄阳': 10115014,
+    '随州': 10115062, '湖北省直辖县级': 10115085,
+    '长沙': 10116001, '株洲': 10116002, '益阳': 10116003, '岳阳': 10116004,
+    '常德': 10116005, '娄底': 10116007, '怀化': 10116008, '衡阳': 10116009,
+    '邵阳': 10116010, '郴州': 10116011, '张家界': 10116013, '湘潭': 10116014,
+    '永州': 10116075, '湘西土家族苗族自治州': 10116097,
+    '南京': 10118001, '苏州': 10118002, '无锡': 10118003, '徐州': 10118004,
+    '常州': 10118005, '镇江': 10118006, '连云港': 10118007, '盐城': 10118009,
+    '扬州': 10118010, '南通': 10118011, '淮安': 10118016, '泰州': 10118051,
     '宿迁': 10118063,
-    # 江西
-    '南昌': 10119001,
-    '九江': 10119002,
-    '景德镇': 10119003,
-    '上饶': 10119004,
-    '鹰潭': 10119005,
-    '宜春': 10119006,
-    '萍乡': 10119007,
-    '赣州': 10119008,
-    '吉安': 10119009,
-    '抚州': 10119010,
-    '新余': 10119040,
-    # 内蒙古
-    '呼和浩特': 10121001,
-    '包头': 10121003,
-    '乌海': 10121005,
-    '赤峰': 10121008,
-    '通辽': 10121011,
-    '锡林郭勒盟': 10121089,
-    '阿拉善盟': 10121090,
-    '兴安': 10121091,
-    '鄂尔多斯': 10121092,
-    '呼伦贝尔': 10121093,
-    '巴彦淖尔': 10121094,
-    '乌兰察布': 10121095,
-    # 宁夏
-    '银川': 10122001,
-    '石嘴山': 10122002,
-    '固原': 10122003,
-    '吴忠': 10122010,
+    '南昌': 10119001, '九江': 10119002, '景德镇': 10119003, '上饶': 10119004,
+    '鹰潭': 10119005, '宜春': 10119006, '萍乡': 10119007, '赣州': 10119008,
+    '吉安': 10119009, '抚州': 10119010, '新余': 10119040,
+    '呼和浩特': 10121001, '包头': 10121003, '乌海': 10121005, '赤峰': 10121008,
+    '通辽': 10121011, '锡林郭勒盟': 10121089, '阿拉善盟': 10121090, '兴安': 10121091,
+    '鄂尔多斯': 10121092, '呼伦贝尔': 10121093, '巴彦淖尔': 10121094, '乌兰察布': 10121095,
+    '银川': 10122001, '石嘴山': 10122002, '固原': 10122003, '吴忠': 10122010,
     '中卫': 10122011,
-    # 青海
-    '西宁': 10123001,
-    '果洛': 10123002,
-    '玉树': 10123003,
-    '海西': 10123005,
-    '海东地区': 10123045,
-    '海北藏族自治州': 10123046,
-    '黄南藏族自治州': 10123047,
+    '西宁': 10123001, '果洛': 10123002, '玉树': 10123003, '海西': 10123005,
+    '海东地区': 10123045, '海北藏族自治州': 10123046, '黄南藏族自治州': 10123047,
     '海南藏族自治州': 10123048,
-    # 山东
-    '青岛': 10124001,
-    '威海': 10124002,
-    '济南': 10124003,
-    '淄博': 10124004,
-    '聊城': 10124005,
-    '德州': 10124006,
-    '东营': 10124007,
-    '潍坊': 10124008,
-    '烟台': 10124009,
-    '泰安': 10124011,
-    '菏泽': 10124012,
-    '临沂': 10124013,
-    '枣庄': 10124014,
-    '济宁': 10124015,
-    '日照': 10124016,
-    '滨州': 10124018,
+    '青岛': 10124001, '威海': 10124002, '济南': 10124003, '淄博': 10124004,
+    '聊城': 10124005, '德州': 10124006, '东营': 10124007, '潍坊': 10124008,
+    '烟台': 10124009, '泰安': 10124011, '菏泽': 10124012, '临沂': 10124013,
+    '枣庄': 10124014, '济宁': 10124015, '日照': 10124016, '滨州': 10124018,
     '莱芜': 10124068,
-    # 山西
-    '太原': 10125001,
-    '忻州': 10125003,
-    '大同': 10125005,
-    '临汾': 10125006,
-    '运城': 10125008,
-    '阳泉': 10125009,
-    '长治': 10125010,
-    '晋城': 10125011,
-    '朔州': 10125034,
-    '晋中': 10125107,
-    '吕梁': 10125108,
-    # 陕西
-    '西安': 10126001,
-    '渭南': 10126002,
-    '延安': 10126003,
-    '榆林': 10126005,
-    '宝鸡': 10126006,
-    '安康': 10126007,
-    '汉中': 10126008,
-    '铜川': 10126010,
-    '咸阳': 10126011,
-    '商洛': 10126098,
-    # 四川
-    '成都': 10127001,
-    '乐山': 10127002,
-    '凉山': 10127003,
-    '绵阳': 10127005,
-    '阿坝': 10127007,
-    '雅安': 10127008,
-    '甘孜': 10127009,
-    '广元': 10127010,
-    '南充': 10127011,
-    '内江': 10127013,
-    '自贡': 10127014,
-    '宜宾': 10127015,
-    '泸州': 10127016,
-    '攀枝花': 10127017,
-    '德阳': 10127018,
-    '资阳': 10127021,
-    '眉山': 10127056,
-    '广安': 10127070,
-    '遂宁': 10127117,
-    '巴中': 10127125,
+    '太原': 10125001, '忻州': 10125003, '大同': 10125005, '临汾': 10125006,
+    '运城': 10125008, '阳泉': 10125009, '长治': 10125010, '晋城': 10125011,
+    '朔州': 10125034, '晋中': 10125107, '吕梁': 10125108,
+    '西安': 10126001, '渭南': 10126002, '延安': 10126003, '榆林': 10126005,
+    '宝鸡': 10126006, '安康': 10126007, '汉中': 10126008, '铜川': 10126010,
+    '咸阳': 10126011, '商洛': 10126098,
+    '成都': 10127001, '乐山': 10127002, '凉山': 10127003, '绵阳': 10127005,
+    '阿坝': 10127007, '雅安': 10127008, '甘孜': 10127009, '广元': 10127010,
+    '南充': 10127011, '内江': 10127013, '自贡': 10127014, '宜宾': 10127015,
+    '泸州': 10127016, '攀枝花': 10127017, '德阳': 10127018, '资阳': 10127021,
+    '眉山': 10127056, '广安': 10127070, '遂宁': 10127117, '巴中': 10127125,
     '达州': 10127137,
-    # 云南
-    '昆明': 10130001,
-    '曲靖': 10130002,
-    '昭通': 10130003,
-    '文山': 10130005,
-    '大理': 10130007,
-    '楚雄': 10130008,
-    '临沧': 10130009,
-    '保山': 10130010,
-    '玉溪': 10130011,
-    '丽江': 10130030,
-    '普洱': 10130052,
-    '红河': 10130098,
-    '西双版纳傣族自治州': 10130127,
-    '德宏傣族景颇族自治州': 10130128,
-    '怒江傈僳族自治州': 10130129,
-    '迪庆藏族自治州': 10130130,
-    # 浙江
-    '杭州': 10131001,
-    '温州': 10131002,
-    '宁波': 10131003,
-    '绍兴': 10131004,
-    '湖州': 10131005,
-    '嘉兴': 10131006,
-    '金华': 10131009,
-    '丽水': 10131010,
-    '衢州': 10131011,
-    '台州': 10131012,
-    '舟山': 10131015,
-    # 福建
-    '福州': 10107001,
-    '厦门': 10107002,
-    '泉州': 10107003,
-    '南平': 10107004,
-    '漳州': 10107007,
-    '龙岩': 10107008,
-    '三明': 10107009,
-    '莆田': 10107010,
+    '昆明': 10130001, '曲靖': 10130002, '昭通': 10130003, '文山': 10130005,
+    '大理': 10130007, '楚雄': 10130008, '临沧': 10130009, '保山': 10130010,
+    '玉溪': 10130011, '丽江': 10130030, '普洱': 10130052, '红河': 10130098,
+    '西双版纳傣族自治州': 10130127, '德宏傣族景颇族自治州': 10130128,
+    '怒江傈僳族自治州': 10130129, '迪庆藏族自治州': 10130130,
+    '杭州': 10131001, '温州': 10131002, '宁波': 10131003, '绍兴': 10131004,
+    '湖州': 10131005, '嘉兴': 10131006, '金华': 10131009, '丽水': 10131010,
+    '衢州': 10131011, '台州': 10131012, '舟山': 10131015,
+    '福州': 10107001, '厦门': 10107002, '泉州': 10107003, '南平': 10107004,
+    '漳州': 10107007, '龙岩': 10107008, '三明': 10107009, '莆田': 10107010,
     '宁德': 10107013,
-    # 黑龙江
-    '哈尔滨': 10114001,
-    '绥化': 10114002,
-    '佳木斯': 10114003,
-    '牡丹江': 10114004,
-    '齐齐哈尔': 10114005,
-    '大庆': 10114007,
-    '大兴安岭': 10114008,
-    '鸡西': 10114009,
-    '鹤岗': 10114020,
-    '双鸭山': 10114024,
-    '伊春': 10114042,
-    '黑河': 10114053,
+    '哈尔滨': 10114001, '绥化': 10114002, '佳木斯': 10114003, '牡丹江': 10114004,
+    '齐齐哈尔': 10114005, '大庆': 10114007, '大兴安岭': 10114008, '鸡西': 10114009,
+    '鹤岗': 10114020, '双鸭山': 10114024, '伊春': 10114042, '黑河': 10114053,
     '七台河': 10114067,
-    # 吉林
-    '长春': 10117001,
-    '吉林': 10117002,
-    '通化': 10117004,
-    '四平': 10117006,
-    '白城': 10117007,
-    '松原': 10117008,
-    '辽源': 10117028,
-    '白山': 10117048,
+    '长春': 10117001, '吉林': 10117002, '通化': 10117004, '四平': 10117006,
+    '白城': 10117007, '松原': 10117008, '辽源': 10117028, '白山': 10117048,
     '延边朝鲜族自治州': 10117049,
-    # 辽宁
-    '沈阳': 10120001,
-    '铁岭': 10120002,
-    '抚顺': 10120003,
-    '鞍山': 10120004,
-    '营口': 10120005,
-    '大连': 10120006,
-    '本溪': 10120007,
-    '丹东': 10120008,
-    '锦州': 10120009,
-    '朝阳': 10120010,
-    '阜新': 10120011,
-    '盘锦': 10120012,
-    '辽阳': 10120013,
-    '葫芦岛': 10120014,
-    # 西藏
-    '拉萨': 10128001,
-    '那曲': 10128002,
-    '昌都': 10128003,
-    '山南': 10128004,
-    '日喀则': 10128005,
-    '阿里': 10128006,
-    '林芝': 10128007,
-    # 新疆
-    '乌鲁木齐': 10129001,
-    '克拉玛依': 10129004,
-    '阿勒泰': 10129006,
-    '巴音郭楞': 10129007,
-    '哈密': 10129008,
-    '吐鲁番': 10129009,
-    '阿克苏': 10129010,
-    '喀什': 10129011,
-    '和田': 10129012,
-    '昌吉': 10129017,
-    '塔城': 10129086,
-    '克孜勒苏柯尔克孜自治州': 10129088,
-    '博尔塔拉蒙古自治州': 10129089,
-    '伊犁哈萨克自治州': 10129090,
-    '自治区直辖县级': 10129091,
+    '沈阳': 10120001, '铁岭': 10120002, '抚顺': 10120003, '鞍山': 10120004,
+    '营口': 10120005, '大连': 10120006, '本溪': 10120007, '丹东': 10120008,
+    '锦州': 10120009, '朝阳': 10120010, '阜新': 10120011, '盘锦': 10120012,
+    '辽阳': 10120013, '葫芦岛': 10120014,
+    '拉萨': 10128001, '那曲': 10128002, '昌都': 10128003, '山南': 10128004,
+    '日喀则': 10128005, '阿里': 10128006, '林芝': 10128007,
+    '乌鲁木齐': 10129001, '克拉玛依': 10129004, '阿勒泰': 10129006, '巴音郭楞': 10129007,
+    '哈密': 10129008, '吐鲁番': 10129009, '阿克苏': 10129010, '喀什': 10129011,
+    '和田': 10129012, '昌吉': 10129017, '塔城': 10129086,
+    '克孜勒苏柯尔克孜自治州': 10129088, '博尔塔拉蒙古自治州': 10129089,
+    '伊犁哈萨克自治州': 10129090, '自治区直辖县级': 10129091,
 }
-
-# =============================================================================
-# 爬虫核心类
-# =============================================================================
-
-class ZhenaiCrawler:
-    def __init__(self, token, seedtoken):
-        """
-        :param token:     从抓包 Cookie 中获取的登录 token 字符串
-        :param seedtoken: 从抓包 Headers 中获取的 seedtoken 字符串
-        """
-        self.token = token
-        self.seedtoken = seedtoken
-        self.session = requests.Session()
-        self.last_search_error_code = None
-
-    # ------------------------------------------------------------------
-    # 签名与 UA 生成
-    # ------------------------------------------------------------------
-
-    def generate_signature(self, nonce, timestamp, data):
-        """生成符合成家相亲 API 接口签名校验的 signature"""
-        app_secret = "a66a81665d7ce684410136080290f851"
-        p = f"appKey=seed-zaq&appSecret={app_secret}&nonce={nonce}&timestamp={timestamp}&"
-        for key in sorted(data.keys()):
-            val = data[key] if data[key] is not None else ""
-            p += f"{key}{val}"
-        return hashlib.md5(p.encode("utf-8")).hexdigest().upper()
-
-    def generate_ua(self, channel=925536, sub_channel=3, version="9.13.0", ver_num="52", token=None):
-        """动态生成符合珍爱网小程序安全校验的 ua 字符串与哈希"""
-        t = str(uuid.uuid4())
-        a = token if token else (self.token if self.token else "^CE%JUm#r3w&)")
-        i = a + f"{version}{ver_num}" + t
-        r = 5381
-        for char in i:
-            r = (r + (r << 5) + ord(char)) & 0xFFFFFFFF
-        hash_val = 2147483647 & r
-        return f"h5/{version}/{ver_num}/0/0/0/{channel}/{sub_channel}/0/0/0/{t}/0/0/{hash_val}"
-
-    def _common_headers(self, req_ua):
-        """返回所有接口通用的请求头"""
-        return {
-            "ua": req_ua,
-            "xweb_xhr": "1",
-            "seedtoken": self.seedtoken,
-            "cookie": f"token={self.token}" if self.token else "token=",
-            "user-agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 "
-                "MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI "
-                "MiniProgramEnv/Windows WindowsWechat/WMPF "
-                "WindowsWechat(0x63090a13) UnifiedPCLinuxWechat(0xf2741107) XWEB/14978"
-            ),
-            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "referer": "https://servicewechat.com/wxeb13e85bef8b60d9/426/page-frame.html",
-            "accept": "*/*",
-        }
-
-    # ------------------------------------------------------------------
-    # 搜索接口（登录态，按条件全国检索）
-    # ------------------------------------------------------------------
-
-    def search_members(self, page=1, page_size=20,
-                       age_begin=-1, age_end=-1,
-                       work_city=-1, gender=1,
-                       salary_begin=-1, salary_end=-1, hometown_city=-1):
-        """
-        通过条件搜索接口采集会员列表（需要登录态 token）。
-
-        :param page:       当前页码
-        :param page_size:  每页条数（最大建议 20）
-        :param age_begin:  年龄下限，-1 表示不限
-        :param age_end:    年龄上限，-1 表示不限
-        :param work_city:  城市代码，-1 表示全国不限
-        :param gender:     搜索对象性别：1=女，2=男
-        :param salary_begin: 月收入下限（元），-1 表示不限
-        :param salary_end:   月收入上限（元），-1 表示不限
-        :return:           会员基础信息字典列表（含 memberID/objectID、昵称、城市等）
-        """
-        if not self.token:
-            print("⚠️ 搜索模式必须填入登录 token，当前为游客态，已跳过。")
-            return [], False
-
-        self.last_search_error_code = None
-        url = "https://api.zhenai.com/search/getConditionData.do"
-        req_ua = self.generate_ua()
-        payload = {
-            "ageBegin":          age_begin,
-            "ageEnd":            age_end,
-            "heightBegin":       129,
-            "heightEnd":         -1,
-            "salaryBegin":       salary_begin,
-            "salaryEnd":         salary_end,
-            "multiEducation":    "",
-            "multiWorkCity":     work_city,
-            "multiMarriage":     -1,
-            "occupation":        -1,
-            "multiHomeTown":     hometown_city,
-            "multiHouse":        -1,
-            "car":               -1,
-            "multiChildren":     -1,
-            "multiConstellation":-1,
-            "avatar":            -1,
-            "zhenxin":           1,
-            "identityOk":        -1,
-            "loginType":         3,
-            "pageSize":          page_size,
-            "page":              page,
-            "ua":                req_ua,
-        }
-        try:
-            resp = self.session.post(
-                url, data=payload, headers=self._common_headers(req_ua), timeout=(10, 45)
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("isError"):
-                    self.last_search_error_code = str(data.get("errorCode", ""))
-                    print(f"  搜索接口报错: {data.get('errorMessage')} (code={data.get('errorCode')})")
-                    return [], False
-                inner = data.get("data", {})
-                members = inner.get("list", [])
-                has_next = inner.get("hasNext", False)
-                return members, has_next
-            print(f"搜索接口 HTTP 错误: {resp.status_code} {resp.text[:200]}")
-        except Exception as e:
-            print(f"搜索接口网络异常: {e}")
-        return [], False
-
-    # ------------------------------------------------------------------
-    # 公共：获取个人详情 & 动态
-    # ------------------------------------------------------------------
-
-    def get_member_profile(self, object_id):
-        """获取指定会员的详细信息"""
-        url = "https://api.zhenai.com/profile/getObjectProfileForWeChat.do"
-        req_ua = self.generate_ua()
-        params = {"objectID": object_id, "wxApp": 1, "location": 0, "_method": "GET", "ua": req_ua}
-        try:
-            resp = self.session.get(
-                url, params=params, headers=self._common_headers(req_ua), timeout=(10, 45)
-            )
-            if resp.status_code == 200:
-                return resp.json().get("data", {})
-            print(f"获取会员 {object_id} 资料失败: {resp.status_code}")
-        except Exception as e:
-            print(f"获取会员 {object_id} 资料网络异常: {e}")
-        return {}
-
-    def parse_profile(self, info):
-        """解析会员详细字典中的关键字段"""
-        if not info:
-            return None
-        tags = []
-        for section in info.get("basicDetailsList", []):
-            for tag_item in section.get("detailListV2", []):
-                tags.append(tag_item.get("tagName"))
-        return {
-            "ID":       info.get("memberID", ""),
-            "昵称":     info.get("nickname", ""),
-            "性别":     "女" if info.get("gender") == 1 else "男",
-            "年龄":     info.get("age", ""),
-            "居住地":   info.get("workCityString", ""),
-            "月收入":   info.get("salaryString", ""),
-            "学历":     info.get("educationString", ""),
-            "婚姻状况": info.get("marriageString", ""),
-            "标签":     " | ".join(tags),
-            "独白":     info.get("introduce", {}).get("monologue", ""),
-            "头像链接": info.get("avatarURL", ""),
-            "VIP":      "是" if info.get("isZhenXinVip") else "否",
-        }
-
-    # 会激活「动态」入口的真实动态类型（图文/视频等）
-    # 不含资料变更系统卡：4上传头像 5内心独白 6实名认证 8兴趣爱好
-    FEED_MOMENT_TYPES = {0, 1, 2, 7, 12}
-
-    def get_moments(self, object_id):
-        """获取指定会员的动态列表，支持分页（最多 5 页）"""
-        moments = []
-        timestamp = 0
-        for _ in range(5):
-            req_ua = self.generate_ua()
-            url = "https://api.zhenai.com/moment/getPersonalMomentsByWeChat.do"
-            params = {
-                "objectID": object_id, "limit": 10,
-                "timestamp": timestamp, "momentType": 0,
-                "_method": "GET", "ua": req_ua,
-            }
-            try:
-                resp = self.session.get(
-                    url, params=params, headers=self._common_headers(req_ua), timeout=(10, 45)
-                )
-                if resp.status_code == 200:
-                    data = resp.json().get("data", {})
-                    page_list = data.get("list", [])
-                    if not page_list:
-                        break
-                    moments.extend(page_list)
-                    if not data.get("hasNext", False):
-                        break
-                    last_time = page_list[-1].get("moment", {}).get("createTime")
-                    if last_time:
-                        timestamp = last_time
-                    else:
-                        break
-                else:
-                    break
-            except Exception as e:
-                print(f"    获取 {object_id} 动态网络异常: {e}")
-                break
-            time.sleep(0.2)
-        return moments
-
-    def has_purple_panel(self, cert_ts, moments, now=None):
-        """
-        紫图可见：最新实名认证处于实时 48 小时内，且不存在 48 小时前的日常动态。
-
-        认证后不要求发布任何动态。type 0/1 视为用户日常动态；只要存在
-        早于当前实时 48 小时窗口的 type 0/1 动态，即不满足紫图要求。
-        type 2/4/5/6/7/8/12 等资料、头像、认证与系统卡不作为动态记录。
-        """
-        if not cert_ts or not moments:
-            return False
-        reference_now = time.time() if now is None else float(now)
-        certification_seconds = float(cert_ts) / 1000
-        if not reference_now - CERTIFICATION_WINDOW_HOURS * 3600 <= certification_seconds <= reference_now:
-            return False
-        window_start = reference_now - CERTIFICATION_WINDOW_HOURS * 3600
-        for item in moments:
-            moment = item.get("moment") or {}
-            moment_type = moment.get("type", -1)
-            moment_timestamp = moment.get("createTime") or 0
-            if moment_type in (0, 1) and moment_timestamp / 1000 < window_start:
-                return False
-        return True
-
-    def parse_moments_times(self, moments, object_id=None, check_purple=True):
-        """解析动态时间（最新、实名认证、最早）+ 紫图资格。"""
-        if not moments:
-            return "", "", "", False
-
-        def fmt(ts):
-            return datetime.fromtimestamp(ts / 1000, BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
-
-        latest = fmt(moments[0].get("moment", {}).get("createTime"))
-        cert = ""
-        cert_ts = 0
-        for m in moments:
-            if m.get("text") == "已完成人脸认证" or m.get("moment", {}).get("type") == 6:
-                timestamp = m.get("moment", {}).get("createTime", 0) or 0
-                if timestamp > cert_ts:
-                    cert_ts = timestamp
-        if cert_ts:
-            cert = fmt(cert_ts)
-
-        has_recent = False
-        if check_purple and cert_ts > 0:
-            has_recent = self.has_purple_panel(cert_ts, moments=moments)
-
-        earliest = fmt(moments[-1].get("moment", {}).get("createTime")) if not cert else ""
-        return latest, cert, earliest, has_recent
-
-
-# =============================================================================
-# 公共：处理单个会员 ID（查详情 → 过滤 → 抓动态 → 写入 SQLite）
-# =============================================================================
-
-def income_meets_minimum(income_text, minimum_income):
-    """Return whether a salary band's lower bound meets the configured minimum."""
-    if not minimum_income:
-        return True
-    text = str(income_text or "").replace(",", "").replace("，", "")
-    values = [int(value) for value in re.findall(r"\d+", text)]
-    if not values:
-        return False
-    if "以下" in text:
-        return False
-    # Salary labels are bands: 5001–8000 must not satisfy an 8000-plus
-    # requirement.  Use the lower bound for ranges, not the upper bound.
-    return values[0] >= minimum_income
-
-
-def process_member(crawler, mid, scraped_ids, extra_filters=None, cert_days=0):
-    """
-    处理单个会员 ID。
-    cert_days>0: 先查动态 → 实名不在N天内直接跳过（省1次详情API）
-    """
-    mid_str = str(mid)
-    if mid_str in scraped_ids:
-        return False
-
-    # ====== 快速模式：先查动态 ======
-    pre_moments = []
-    if cert_days > 0:
-        pre_moments = crawler.get_moments(mid)
-        _, cert_time, _, _ = crawler.parse_moments_times(
-            pre_moments, object_id=mid, check_purple=False
-        )
-        # 没有实名 或 实名超过N天 → 跳过（紫图只打标签，不拦写入）
-        if not cert_time:
-            scraped_ids.add(mid_str)
-            save_scraped_id(mid_str)
-            return False
-        if not certification_within_window(cert_time, hours=cert_days * 24):
-            scraped_ids.add(mid_str)
-            save_scraped_id(mid_str)
-            return False
-
-    raw_info = crawler.get_member_profile(mid)
-    parsed = crawler.parse_profile(raw_info)
-
-    # 记录已查询
-    scraped_ids.add(mid_str)
-    save_scraped_id(mid_str)
-
-    if not parsed:
-        print(f"    解析会员 {mid} 失败或返回空")
-        return False
-
-    # 额外过滤（学历/婚姻）；工资条件只用于群推送，不拦截采集入库
-    if extra_filters:
-        income_f, edu_f, marriage_f = extra_filters
-        if edu_f and parsed.get("学历", "") != edu_f:
-            print(f"    跳过: {parsed['昵称']} (学历: {parsed.get('学历')}，不符合'{edu_f}')")
-            return False
-        if marriage_f and parsed.get("婚姻状况", "") != marriage_f:
-            print(f"    跳过: {parsed['昵称']} (婚姻: {parsed.get('婚姻状况')}，不符合'{marriage_f}')")
-            return False
-
-    # 抓动态时间 / 紫图入口
-    if cert_days > 0:
-        latest, cert, earliest, has_real_moment = crawler.parse_moments_times(
-            pre_moments, object_id=mid
-        )
-    else:
-        moments = crawler.get_moments(mid)
-        latest, cert, earliest, has_real_moment = crawler.parse_moments_times(
-            moments, object_id=mid
-        )
-    parsed["最新动态时间"] = latest
-    parsed["实名认证时间"] = cert
-    parsed["最早动态时间"] = earliest
-    parsed["VIP"] = parsed.get("VIP", "否")
-    parsed["紫图可见"] = "是" if has_real_moment else "否"
-
-    upsert_member(parsed)
-    print(
-        f"    🎉 写入: {parsed['昵称']} | {parsed['性别']} | {parsed['年龄']}岁 | "
-        f"{parsed['居住地']} | 💰{parsed.get('月收入', '')} | 🎓{parsed.get('学历', '')} | 💍{parsed.get('婚姻状况', '')} | "
-        f"最新动态:{latest or '无'} | 实名:{cert or '无'} | 紫图:{parsed['紫图可见']}"
-    )
-    return True
 
 PROVINCE_MAP = {
     "北京": ["朝阳区","海淀区","丰台区","昌平区","通州区","大兴区","西城区","房山区","顺义区","东城区","石景山区","怀柔区","门头沟区","密云区","延庆区","平谷区"],
@@ -952,31 +266,6 @@ PROVINCE_MAP = {
     "西藏": ["拉萨","那曲","昌都","山南","日喀则","阿里","林芝"],
     "新疆": ["乌鲁木齐","克拉玛依","阿勒泰","巴音郭楞","哈密","吐鲁番","阿克苏","喀什","和田","昌吉","塔城","克孜勒苏柯尔克孜自治州","博尔塔拉蒙古自治州","伊犁哈萨克自治州","自治区直辖县级"],
 }
-PROVINCE_CODE_MAP = {
-    "北京": 10102000, "上海": 10103000, "广东": 10101000,
-    "天津": 10104000, "重庆": 10105000, "安徽": 10106000,
-    "福建": 10107000, "甘肃": 10108000, "广西": 10109000,
-    "贵州": 10110000, "海南": 10111000, "河北": 10112000,
-    "河南": 10113000, "黑龙江": 10114000, "湖北": 10115000,
-    "湖南": 10116000, "吉林": 10117000, "江苏": 10118000,
-    "江西": 10119000, "辽宁": 10120000, "内蒙古": 10121000,
-    "宁夏": 10122000, "青海": 10123000, "山东": 10124000,
-    "山西": 10125000, "陕西": 10126000, "四川": 10127000,
-    "西藏": 10128000, "新疆": 10129000, "云南": 10130000,
-    "浙江": 10131000,
-}
-
-# 大城市单独搜（突破省码1000人上限）
-TOP_CITY_CODES = {
-    "北京": 10102000, "上海": 10103000, "广州": 10101002,
-    "深圳": 10101201, "成都": 10127001, "重庆": 10105000,
-    "杭州": 10131001, "武汉": 10115001, "西安": 10126001,
-    "郑州": 10113001, "南京": 10118001, "天津": 10104000,
-    "长沙": 10116001, "东莞": 10101007, "佛山": 10101003,
-    "合肥": 10106001, "济南": 10124003, "青岛": 10124001,
-    "苏州": 10118002, "沈阳": 10120001, "大连": 10120006,
-    "厦门": 10107002, "福州": 10107001,
-}
 
 # ========== SQLite persistence ==========
 DB_LOCK = threading.RLock()
@@ -998,7 +287,6 @@ def db_connect():
 def init_db():
     Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
     with DB_LOCK, db_connect() as connection:
-        # DELETE journaling keeps the project directory at exactly three persistent files.
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.executescript("""
@@ -1008,9 +296,6 @@ def init_db():
                 avatar_url TEXT, latest_moment_time TEXT, certification_time TEXT,
                 earliest_moment_time TEXT, vip TEXT, purple_visible TEXT,
                 inserted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS scraped_ids (
-                member_id TEXT PRIMARY KEY, scraped_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS pushed_ids (
                 member_id TEXT PRIMARY KEY, pushed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -1037,9 +322,14 @@ def set_state(key, value):
     with DB_LOCK, db_connect() as connection:
         connection.execute(
             "INSERT INTO runtime_state(state_key, state_value, updated_at) VALUES(?, ?, CURRENT_TIMESTAMP) "
-        "ON CONFLICT(state_key) DO UPDATE SET state_value=excluded.state_value, updated_at=CURRENT_TIMESTAMP",
-        (key, str(value)),
-    )
+            "ON CONFLICT(state_key) DO UPDATE SET state_value=excluded.state_value, updated_at=CURRENT_TIMESTAMP",
+            (key, str(value)),
+        )
+
+
+def delete_state(key):
+    with DB_LOCK, db_connect() as connection:
+        connection.execute("DELETE FROM runtime_state WHERE state_key = ?", (key,))
 
 
 def get_site_asset(asset_key):
@@ -1050,24 +340,30 @@ def get_site_asset(asset_key):
     return (row["content"], row["content_type"]) if row else (None, None)
 
 
-def delete_state(key):
-    with DB_LOCK, db_connect() as connection:
-        connection.execute("DELETE FROM runtime_state WHERE state_key = ?", (key,))
-
-
 def load_scraped_ids():
-    with DB_LOCK, db_connect() as connection:
-        return {row[0] for row in connection.execute("SELECT member_id FROM scraped_ids")}
+    scraped = set()
+    if os.path.exists(SCRAPED_IDS_FILE):
+        try:
+            with open(SCRAPED_IDS_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        scraped.add(line)
+        except OSError as error:
+            print(f"读取历史ID缓存失败: {error}")
+    return scraped
 
 
 def save_scraped_id(member_id):
-    with DB_LOCK, db_connect() as connection:
-        connection.execute("INSERT OR IGNORE INTO scraped_ids(member_id) VALUES(?)", (str(member_id),))
+    try:
+        with open(SCRAPED_IDS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{member_id}\n")
+    except OSError as error:
+        print(f"保存历史ID缓存失败: {error}")
 
 
-def upsert_member(record):
-    """Write one parsed member record to SQLite, updating an existing ID in place."""
-    values = {database_name: str(record.get(csv_name, "") or "") for csv_name, database_name in MEMBER_COLUMNS.items()}
+def upsert_member_record(record):
+    values = {db_col: str(record.get(csv_name, "") or "") for csv_name, db_col in MEMBER_COLUMNS.items()}
     if not values["member_id"]:
         return
     columns = ", ".join(values)
@@ -1082,27 +378,21 @@ def upsert_member(record):
 
 
 def migrate_legacy_files():
-    """Import the previous CSV and state files exactly once before legacy files are archived."""
+    """Import previous CSV and state files exactly once before legacy files are archived."""
     if get_state("legacy_migration_complete") == "1":
         return
     legacy_members = Path(BASE_DIR) / "zhenai_members.csv"
-    legacy_scraped = Path(BASE_DIR) / "scraped_ids.txt"
     legacy_pushed = Path(BASE_DIR) / ".pushed_cert_ids.txt"
     legacy_progress = Path(BASE_DIR) / "city_progress.txt"
     legacy_snapshot = Path(BASE_DIR) / "daily_snapshot.json"
-    imported_members = imported_scraped = imported_pushed = 0
+    imported_members = imported_pushed = 0
     try:
         if legacy_members.exists():
             with legacy_members.open("r", encoding="utf-8-sig", newline="") as handle:
                 for record in csv.DictReader(handle):
                     if (record.get("ID") or "").strip():
-                        upsert_member(record)
+                        upsert_member_record(record)
                         imported_members += 1
-        if legacy_scraped.exists():
-            for member_id in legacy_scraped.read_text(encoding="utf-8").splitlines():
-                if member_id.strip():
-                    save_scraped_id(member_id.strip())
-                    imported_scraped += 1
         if legacy_pushed.exists():
             with DB_LOCK, db_connect() as connection:
                 for member_id in legacy_pushed.read_text(encoding="utf-8").splitlines():
@@ -1118,7 +408,7 @@ def migrate_legacy_files():
     except (OSError, ValueError, csv.Error) as error:
         raise RuntimeError(f"旧数据迁移失败，未切换服务：{error}") from error
     set_state("legacy_migration_complete", "1")
-    print(f"SQLite 数据迁移完成：会员{imported_members}，已查 ID {imported_scraped}，已推送 ID {imported_pushed}")
+    print(f"SQLite 数据迁移完成：会员{imported_members}，已推送 ID {imported_pushed}")
 
 
 def _get_main_total():
@@ -1126,38 +416,11 @@ def _get_main_total():
         return int(connection.execute("SELECT COUNT(*) FROM members").fetchone()[0])
 
 
-def _get_cert_daily_counts():
-    today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
-    day_before = today - timedelta(days=2)
-    with DB_LOCK, db_connect() as connection:
-        rows = connection.execute(
-            "SELECT city, certification_time FROM members WHERE certification_time IS NOT NULL AND certification_time != '' AND certification_time != '无'"
-        ).fetchall()
-    today_count = yesterday_count = day_before_count = 0
-    city_count = {}
-    for row in rows:
-        try:
-            certification_date = datetime.strptime(row["certification_time"][:10], "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            continue
-        if certification_date == today:
-            today_count += 1
-        elif certification_date == yesterday:
-            yesterday_count += 1
-            city_count.setdefault(row["city"] or "", {"yd": 0, "db": 0})["yd"] += 1
-        elif certification_date == day_before:
-            day_before_count += 1
-            city_count.setdefault(row["city"] or "", {"yd": 0, "db": 0})["db"] += 1
-    return today_count, yesterday_count, day_before_count, city_count
-
-
 def _get_current_city():
     return get_state("city_progress", "未开始") or "未开始"
 
 
 def _get_checkpoint_label():
-    """Use municipality names in notifications instead of district-level task names."""
     current_city = _get_current_city()
     for municipality in ("北京", "上海", "天津", "重庆"):
         if current_city in PROVINCE_MAP.get(municipality, []):
@@ -1186,6 +449,273 @@ def _get_today_start_total(total):
         pass
     set_state("daily_snapshot", json.dumps({"date": today, "start_total": total}, ensure_ascii=False))
     return total
+
+
+# =============================================================================
+# 爬虫核心类
+# =============================================================================
+
+class ZhenaiCrawler:
+    def __init__(self, token, seedtoken):
+        self.token = token
+        self.seedtoken = seedtoken
+        self.session = requests.Session()
+        self.last_search_error_code = None
+
+    def generate_ua(self, channel=925536, sub_channel=3, version="9.13.0", ver_num="52", token=None):
+        """动态生成符合珍爱网小程序安全校验的 ua 字符串与哈希"""
+        t = str(uuid.uuid4())
+        a = token if token else (self.token if self.token else "^CE%JUm#r3w&)")
+        i = a + f"{version}{ver_num}" + t
+        r = 5381
+        for char in i:
+            r = (r + (r << 5) + ord(char)) & 0xFFFFFFFF
+        hash_val = 2147483647 & r
+        return f"h5/{version}/{ver_num}/0/0/0/{channel}/{sub_channel}/0/0/0/{t}/0/0/{hash_val}"
+
+    def _common_headers(self, req_ua):
+        return {
+            "ua": req_ua,
+            "xweb_xhr": "1",
+            "seedtoken": self.seedtoken,
+            "cookie": f"token={self.token}" if self.token else "token=",
+            "user-agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 "
+                "MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI "
+                "MiniProgramEnv/Windows WindowsWechat/WMPF "
+                "WindowsWechat(0x63090a13) UnifiedPCLinuxWechat(0xf2741107) XWEB/14978"
+            ),
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "referer": "https://servicewechat.com/wxeb13e85bef8b60d9/426/page-frame.html",
+            "accept": "*/*",
+        }
+
+    def search_members(self, page=1, page_size=20,
+                       age_begin=-1, age_end=-1,
+                       work_city=-1, gender=1,
+                       salary_begin=-1, salary_end=-1, hometown_city=-1):
+        if not self.token:
+            print("⚠️ 搜索模式必须填入登录 token，当前为游客态，已跳过。")
+            return [], False
+
+        self.last_search_error_code = None
+        url = "https://api.zhenai.com/search/getConditionData.do"
+        req_ua = self.generate_ua()
+        payload = {
+            "ageBegin": age_begin, "ageEnd": age_end,
+            "heightBegin": 129, "heightEnd": -1,
+            "salaryBegin": salary_begin, "salaryEnd": salary_end,
+            "multiEducation": "", "multiWorkCity": work_city,
+            "multiMarriage": -1, "occupation": -1,
+            "multiHomeTown": hometown_city, "multiHouse": -1,
+            "car": -1, "multiChildren": -1, "multiConstellation": -1,
+            "avatar": -1, "zhenxin": 1, "identityOk": -1,
+            "loginType": 3, "pageSize": page_size, "page": page, "ua": req_ua,
+        }
+        try:
+            resp = self.session.post(url, data=payload, headers=self._common_headers(req_ua))
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("isError"):
+                    self.last_search_error_code = str(data.get("errorCode", ""))
+                    print(f"  搜索接口报错: {data.get('errorMessage')} (code={data.get('errorCode')})")
+                    return [], False
+                inner = data.get("data", {})
+                return inner.get("list", []), inner.get("hasNext", False)
+            print(f"搜索接口 HTTP 错误: {resp.status_code} {resp.text[:200]}")
+        except Exception as e:
+            print(f"搜索接口网络异常: {e}")
+        return [], False
+
+    def get_member_profile(self, object_id):
+        url = "https://api.zhenai.com/profile/getObjectProfileForWeChat.do"
+        req_ua = self.generate_ua()
+        params = {"objectID": object_id, "wxApp": 1, "location": 0, "_method": "GET", "ua": req_ua}
+        try:
+            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
+            if resp.status_code == 200:
+                return resp.json().get("data", {})
+            print(f"获取会员 {object_id} 资料失败: {resp.status_code}")
+        except Exception as e:
+            print(f"获取会员 {object_id} 资料网络异常: {e}")
+        return {}
+
+    def parse_profile(self, info):
+        if not info:
+            return None
+        tags = []
+        for section in info.get("basicDetailsList", []):
+            for tag_item in section.get("detailListV2", []):
+                tags.append(tag_item.get("tagName"))
+        return {
+            "ID": info.get("memberID", ""),
+            "昵称": info.get("nickname", ""),
+            "性别": "女" if info.get("gender") == 1 else "男",
+            "年龄": info.get("age", ""),
+            "居住地": info.get("workCityString", ""),
+            "月收入": info.get("salaryString", ""),
+            "学历": info.get("educationString", ""),
+            "婚姻状况": info.get("marriageString", ""),
+            "标签": " | ".join(tags),
+            "独白": info.get("introduce", {}).get("monologue", ""),
+            "头像链接": info.get("avatarURL", ""),
+            "VIP": "是" if info.get("isZhenXinVip") else "否",
+        }
+
+    def get_moments(self, object_id):
+        """获取指定会员第一页动态（limit 10），不再翻页。"""
+        req_ua = self.generate_ua()
+        url = "https://api.zhenai.com/moment/getPersonalMomentsByWeChat.do"
+        params = {
+            "objectID": object_id, "limit": 10,
+            "timestamp": 0, "momentType": 0,
+            "_method": "GET", "ua": req_ua,
+        }
+        try:
+            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
+            if resp.status_code == 200:
+                return resp.json().get("data", {}).get("list", []) or []
+        except Exception as e:
+            print(f"    获取 {object_id} 动态网络异常: {e}")
+        return []
+
+    def has_purple_panel(self, cert_ts, now=None):
+        """
+        紫图可见（新判定）：
+        只需要实名认证时间落在「当前实时时间向前 48 小时」窗口内即为是。
+        有没有动态都不影响判定；48 小时外一律判否。
+        """
+        if not cert_ts:
+            return False
+        reference_now = time.time() if now is None else float(now)
+        certification_seconds = float(cert_ts) / 1000
+        window_start = reference_now - CERTIFICATION_WINDOW_HOURS * 3600
+        return window_start <= certification_seconds <= reference_now
+
+    def parse_moments_times(self, moments, object_id=None, check_purple=True):
+        """解析动态时间（最新、实名认证、最早）+ 紫图资格。"""
+        if not moments:
+            return "", "", "", False
+
+        def fmt(ts):
+            return datetime.fromtimestamp(ts / 1000, BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+
+        latest = fmt(moments[0].get("moment", {}).get("createTime"))
+        cert = ""
+        cert_ts = 0
+        for m in moments:
+            if m.get("text") == "已完成人脸认证" or m.get("moment", {}).get("type") == 6:
+                timestamp = m.get("moment", {}).get("createTime", 0) or 0
+                if timestamp > cert_ts:
+                    cert_ts = timestamp
+        if cert_ts:
+            cert = fmt(cert_ts)
+
+        has_recent = False
+        if check_purple and cert_ts > 0:
+            has_recent = self.has_purple_panel(cert_ts)
+
+        earliest = fmt(moments[-1].get("moment", {}).get("createTime")) if not cert else ""
+        return latest, cert, earliest, has_recent
+
+
+# =============================================================================
+# 公共：处理单个会员 ID（查详情 → 过滤 → 抓动态 → 写库）
+# =============================================================================
+
+def income_meets_minimum(income_text, minimum_income):
+    """Return whether a salary band's lower bound meets the configured minimum."""
+    if not minimum_income:
+        return True
+    text = str(income_text or "").replace(",", "").replace("，", "")
+    values = [int(value) for value in re.findall(r"\d+", text)]
+    if not values:
+        return False
+    if "以下" in text:
+        return False
+    return values[0] >= minimum_income
+
+
+def process_member(crawler, mid, scraped_ids,
+                   gender_filter=None, city_filter=None,
+                   extra_filters=None, cert_days=0):
+    """
+    处理单个会员 ID。
+    cert_days>0: 先查动态 → 实名不在 N 天内直接跳过（省 1 次详情 API）
+
+    处理顺序：
+      1. 查 scraped_ids 缓存 → 命中直接跳过
+      2. cert_days>0 时，先拉动态拿实名时间，实名缺失 / 过期 → 写缓存后跳过（不写库）
+      3. 拉详情 profile，解析字段
+      4. 无论后续过滤是否通过，立即写入 scraped_ids 缓存
+      5. 城市 / 性别 / 学历 / 婚姻过滤
+      6. 动态时间 + 紫图判定
+      7. 通过后 upsert 进 members 表
+    """
+    mid_str = str(mid)
+    if mid_str in scraped_ids:
+        return False
+
+    # ====== 快速模式：先查动态拿实名时间，过期直接跳过 ======
+    pre_moments = []
+    if cert_days > 0:
+        pre_moments = crawler.get_moments(mid)
+        _, cert_time, _, _ = crawler.parse_moments_times(
+            pre_moments, object_id=mid, check_purple=False
+        )
+        if not cert_time or not certification_within_window(cert_time, hours=cert_days * 24):
+            scraped_ids.add(mid_str)
+            save_scraped_id(mid_str)
+            return False
+
+    raw_info = crawler.get_member_profile(mid)
+    parsed = crawler.parse_profile(raw_info)
+
+    scraped_ids.add(mid_str)
+    save_scraped_id(mid_str)
+
+    if not parsed:
+        print(f"    解析会员 {mid} 失败或返回空")
+        return False
+
+    if city_filter and city_filter not in parsed["居住地"]:
+        print(f"    跳过: {parsed['昵称']} (居住地: {parsed['居住地']}，不含'{city_filter}')")
+        return False
+
+    if gender_filter and parsed["性别"] != gender_filter:
+        print(f"    跳过: {parsed['昵称']} (性别: {parsed['性别']}，不符合'{gender_filter}')")
+        return False
+
+    if extra_filters:
+        _, edu_f, marriage_f = extra_filters
+        if edu_f and parsed.get("学历", "") != edu_f:
+            print(f"    跳过: {parsed['昵称']} (学历: {parsed.get('学历')}，不符合'{edu_f}')")
+            return False
+        if marriage_f and parsed.get("婚姻状况", "") != marriage_f:
+            print(f"    跳过: {parsed['昵称']} (婚姻: {parsed.get('婚姻状况')}，不符合'{marriage_f}')")
+            return False
+
+    if cert_days > 0:
+        moments = pre_moments
+    else:
+        moments = crawler.get_moments(mid)
+    latest, cert, earliest, has_real_moment = crawler.parse_moments_times(
+        moments, object_id=mid
+    )
+    parsed["最新动态时间"] = latest
+    parsed["实名认证时间"] = cert
+    parsed["最早动态时间"] = earliest
+    parsed["VIP"] = parsed.get("VIP", "否")
+    parsed["紫图可见"] = "是" if has_real_moment else "否"
+
+    upsert_member_record(parsed)
+    print(
+        f"    🎉 写入: {parsed['昵称']} | {parsed['性别']} | {parsed['年龄']}岁 | "
+        f"{parsed['居住地']} | 💰{parsed.get('月收入', '')} | 🎓{parsed.get('学历', '')} | 💍{parsed.get('婚姻状况', '')} | "
+        f"最新动态:{latest or '无'} | 实名:{cert or '无'} | 紫图:{parsed['紫图可见']}"
+    )
+    return True
 
 
 # ========== Flask dashboard ==========
@@ -1224,7 +754,6 @@ def emit(message):
             try:
                 subscriber.put_nowait(message)
             except queue.Full:
-                # Keep the newest state when a detached or slow browser falls behind.
                 try:
                     subscriber.get_nowait()
                     subscriber.put_nowait(message)
@@ -1235,11 +764,6 @@ def emit(message):
 def clear_live_log_history():
     with log_broadcast_lock:
         log_history.clear()
-
-
-def get_live_log_history():
-    with log_broadcast_lock:
-        return list(log_history)
 
 
 class LogCapture(io.StringIO):
@@ -1254,7 +778,7 @@ class LogCapture(io.StringIO):
         pass
 
 
-def send_start_report(age_begin, age_end):
+def send_start_report(age_begin, age_end, gender, cert_days):
     if not TG_BOT_TOKEN:
         return
     now = datetime.now(BEIJING_TZ)
@@ -1272,32 +796,28 @@ def send_start_report(age_begin, age_end):
         if not chat_id:
             continue
         try:
-            requests.post(
+            response = requests.post(
                 f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": message}, timeout=10,
             )
+            if response.ok and os.environ.get("AUTO_DELETE_START_REPORT", "1") != "0":
+                try:
+                    message_id = response.json().get("result", {}).get("message_id")
+                    if message_id:
+                        time.sleep(_env_int("START_REPORT_DELETE_DELAY_SECONDS", 3))
+                        delete_response = requests.post(
+                            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/deleteMessage",
+                            json={"chat_id": chat_id, "message_id": message_id}, timeout=10,
+                        )
+                        if not delete_response.ok:
+                            emit(f"启动报备自动撤回失败：HTTP {delete_response.status_code}")
+                except (ValueError, TypeError, requests.RequestException):
+                    emit("启动报备自动撤回失败，不影响采集任务。")
         except requests.RequestException:
             emit("启动报备发送失败，不影响采集任务。")
 
 
-def _get_search_config():
-    filters = get_run_filter_config()
-    return (
-        list(filters["provinces"]),
-        filters["age_begin"],
-        filters["age_end"],
-        DEFAULT_SEARCH_CONFIG["gender"],
-        DEFAULT_SEARCH_CONFIG["max_pages"],
-        (
-            DEFAULT_SEARCH_CONFIG["income_filter"], DEFAULT_SEARCH_CONFIG["education_filter"],
-            DEFAULT_SEARCH_CONFIG["marriage_filter"], DEFAULT_SEARCH_CONFIG["cert_days"],
-            filters["minimum_income"], filters["push_window_hours"],
-        ),
-    )
-
-
 def get_location_mode():
-    """Return the whole-round location mode: work area or hometown."""
     mode = get_state("location_mode", "work")
     return mode if mode in {"work", "hometown"} else "work"
 
@@ -1311,7 +831,7 @@ def location_mode_label(mode):
 
 
 INCOME_OPTIONS = (0, 3000, 5000, 8000, 12000)
-PUSH_WINDOW_OPTIONS = (24, 40, 48)
+PUSH_WINDOW_OPTIONS = (24, 48)
 AGE_OPTIONS = ((40, 65), (45, 65), (50, 65), (55, 65))
 PUSH_AGE_BEGIN = _env_int("PUSH_AGE_BEGIN", 45)
 PUSH_AGE_END = _env_int("PUSH_AGE_END", 60)
@@ -1319,7 +839,6 @@ MIN_SELECTED_PROVINCES = _env_int("MIN_SELECTED_PROVINCES", 15)
 
 
 def selectable_provinces():
-    """Return all available provinces in a stable display order, excluding Fujian."""
     return sorted(province for province in PROVINCE_MAP if province not in EXCLUDED_PROVINCES)
 
 
@@ -1334,7 +853,6 @@ def default_run_filter_config():
 
 
 def get_run_filter_config():
-    """Load the pending run controls, repairing obsolete or invalid saved choices."""
     defaults = default_run_filter_config()
     try:
         saved = json.loads(get_state("run_filter_config", ""))
@@ -1342,7 +860,7 @@ def get_run_filter_config():
         saved = {}
     selected_provinces = saved.get("provinces") if isinstance(saved, dict) else None
     valid_provinces = set(selectable_provinces())
-    provinces = [province for province in selected_provinces or defaults["provinces"] if province in valid_provinces]
+    provinces = [p for p in selected_provinces or defaults["provinces"] if p in valid_provinces]
     if not provinces:
         provinces = defaults["provinces"]
     try:
@@ -1370,7 +888,6 @@ def get_run_filter_config():
 
 
 def validate_run_filter_config(payload):
-    """Validate controls received from the password-protected dashboard."""
     if not isinstance(payload, dict):
         raise ValueError("筛选配置格式无效")
     available = set(selectable_provinces())
@@ -1400,7 +917,7 @@ def validate_run_filter_config(payload):
     if minimum_income not in INCOME_OPTIONS or push_window_hours not in PUSH_WINDOW_OPTIONS:
         raise ValueError("筛选选项无效")
     return {
-        "provinces": [province for province in selectable_provinces() if province in set(provinces)],
+        "provinces": [p for p in selectable_provinces() if p in set(provinces)],
         "age_begin": age_begin,
         "age_end": age_end,
         "minimum_income": minimum_income,
@@ -1413,7 +930,6 @@ def save_run_filter_config(config):
 
 
 def cancel_auto_restart(announce=False):
-    """Cancel a normal-completion retry without affecting an active crawl."""
     global auto_restart_timer, auto_restart_generation
     with auto_restart_lock:
         auto_restart_generation += 1
@@ -1426,12 +942,22 @@ def cancel_auto_restart(announce=False):
 
 
 def _launch_crawl(auto_started=False):
-    """Start one crawl run while start_lock is held; returns (ok, message)."""
     global crawl_thread
     if crawl_running.is_set():
         return False, "已有采集任务在运行"
     clear_live_log_history()
-    provinces, age_begin, age_end, gender, max_pages, extra = _get_search_config()
+    filters = get_run_filter_config()
+    provinces = filters["provinces"]
+    age_begin = filters["age_begin"]
+    age_end = filters["age_end"]
+    gender = DEFAULT_SEARCH_CONFIG["gender"]
+    max_pages = DEFAULT_SEARCH_CONFIG["max_pages"]
+    extra = (
+        DEFAULT_SEARCH_CONFIG["income_filter"],
+        DEFAULT_SEARCH_CONFIG["education_filter"],
+        DEFAULT_SEARCH_CONFIG["marriage_filter"],
+        DEFAULT_SEARCH_CONFIG["cert_days"],
+    )
     location_mode = get_location_mode()
     _get_today_start_total(_get_main_total())
     manual_stop_requested.clear()
@@ -1445,19 +971,19 @@ def _launch_crawl(auto_started=False):
         emit(f"🔄 等待结束，已自动启动新一轮{location_mode_label(location_mode)}采集。")
     else:
         emit(f"开始搜索采集 | {'、'.join(provinces)} | {gender} | {age_begin}-{age_end} 岁 | 最多 {max_pages} 页")
-    emit(f"固定规则：近 {extra[3] * 24} 小时实名认证与紫图用户")
-    emit(f"群推送规则：月收入 {extra[4]} 元以上")
+    emit(f"固定规则：近 {extra[3] * 24} 小时实名认证即判紫图")
+    emit(f"群推送规则：月收入 {filters['minimum_income']} 元以上")
     crawl_thread = threading.Thread(
-        target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra, location_mode), daemon=True,
+        target=crawl_worker,
+        args=(provinces, age_begin, age_end, gender, max_pages, extra, location_mode),
+        daemon=True,
     )
     crawl_thread.start()
-    if not auto_started:
-        threading.Thread(target=send_start_report, args=(age_begin, age_end), daemon=True).start()
+    threading.Thread(target=send_start_report, args=(age_begin, age_end, gender, extra[3]), daemon=True).start()
     return True, ""
 
 
 def schedule_auto_restart(delay_seconds=AUTO_RESTART_DELAY_SECONDS, restoring=False):
-    """Schedule a new run only after a normal complete traversal."""
     global auto_restart_timer, auto_restart_generation
     if not AUTO_RESTART_ENABLED:
         return
@@ -1498,7 +1024,6 @@ def auto_restart_remaining_seconds():
 
 
 def resume_auto_restart_if_pending():
-    """Resume an intact normal-completion countdown after a service restart."""
     if not AUTO_RESTART_ENABLED or crawl_running.is_set():
         return
     remaining = auto_restart_remaining_seconds()
@@ -1509,7 +1034,6 @@ def resume_auto_restart_if_pending():
 
 
 def resume_crawl_if_intended():
-    """Resume an interrupted crawl only when the last user intent was running."""
     if get_state("crawl_intent", "") != "running" or crawl_running.is_set():
         return
     if get_state("auto_restart_at", ""):
@@ -1519,7 +1043,7 @@ def resume_crawl_if_intended():
             _launch_crawl(auto_started=True)
 
 
-def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0, 0), location_mode="work"):
+def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", "", 0), location_mode="work"):
     crawler = ZhenaiCrawler(token=MY_TOKEN, seedtoken=MY_SEED)
     scraped = load_scraped_ids()
     gender_value = 1 if gender == "女" else 2
@@ -1565,8 +1089,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
         set_state("city_progress", city_name)
         set_state("runtime_last_progress_at", str(time.time()))
         city_new = 0
-        # Page 1 is intentionally skipped for every city; start from page 2.
-        for page in range(2, max_pages + 1):
+        for page in range(1, max_pages + 1):
             if not crawl_running.is_set():
                 break
             time.sleep(CRAWL_DELAY_SECONDS)
@@ -1586,14 +1109,17 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
                 break
             if not members:
                 break
-            ids = [member.get("memberId") or member.get("memberID") or member.get("objectID") for member in members]
+            ids = [m.get("memberId") or m.get("memberID") or m.get("objectID") for m in members]
             ids = [member_id for member_id in ids if member_id]
             new_ids = [member_id for member_id in ids if str(member_id) not in scraped]
             emit(f"  📄 第{page}页: {len(ids)}人, 新{len(new_ids)}人")
             for member_id in ids:
                 if str(member_id) in scraped or not crawl_running.is_set():
                     continue
-                if process_member(crawler, member_id, scraped, extra[:3], extra[3]):
+                if process_member(
+                    crawler, member_id, scraped,
+                    extra_filters=extra[:3], cert_days=extra[3],
+                ):
                     city_new += 1
                     total_new += 1
                 time.sleep(CRAWL_DELAY_SECONDS)
@@ -1637,38 +1163,6 @@ def crawl_worker(provinces, age_begin, age_end, gender, max_pages, extra, locati
         emit("__DONE__")
 
 
-def tg_hourly_reporter():
-    last_total = None
-    next_report_at = 0.0
-    while True:
-        if not crawl_running.is_set():
-            last_total = None
-            next_report_at = 0.0
-            time.sleep(1)
-            continue
-        if time.monotonic() < next_report_at:
-            time.sleep(min(1, next_report_at - time.monotonic()))
-            continue
-        try:
-            total = _get_main_total()
-            cert_today, cert_yesterday, cert_day_before, _ = _get_cert_daily_counts()
-            today_new = total - _get_today_start_total(total)
-            if total > 0 and total != last_total and TG_BOT_TOKEN and TG_CHAT_ID and TG_PRIVATE_PUSH_ENABLED:
-                message = "\n".join((
-                    "💵 八 方 来 财 💵", "━━━━━━━━━━", f"📝 今日采集数量: {today_new} 条",
-                    f"💭 当天实名: {cert_today} 条", f"💭 昨日实名: {cert_yesterday} 条",
-                    f"💭 前天实名: {cert_day_before} 条",
-                    "━━━━━━━━━━", f"🟢 采集中 | 📍 {_get_current_city()}", "⏰ " + time.strftime("%H:%M"),
-                ))
-                requests.post(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage", json={"chat_id": TG_CHAT_ID, "text": message}, timeout=10)
-                last_total = total
-        except requests.RequestException:
-            emit("定时播报发送失败，不影响采集任务。")
-        except (OSError, ValueError, sqlite3.Error):
-            emit("定时播报统计失败，不影响采集任务。")
-        next_report_at = time.monotonic() + REPORT_INTERVAL_SECONDS
-
-
 def tg_daily_push_reporter():
     """Send yesterday's successful group-push count at Beijing midnight."""
     last_report_date = get_state("last_daily_push_report_date", "")
@@ -1688,13 +1182,11 @@ def tg_daily_push_reporter():
                         "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (report_date,)
                     ).fetchone()[0]
                 text = "\n".join((
-                    "📊 昨日群推送统计",
-                    "━━━━━━━━━━",
+                    "📊 昨日群推送统计", "━━━━━━━━━━",
                     f"日期：{report_date}",
                     f"当天采集：{collected_count} 条",
                     f"成功推送：{pushed_count} 条",
-                    "━━━━━━━━━━",
-                    "机器人：TopMan_ZiYuan_bot",
+                    "━━━━━━━━━━", "机器人：TopMan_ZiYuan_bot",
                 ))
                 response = requests.post(
                     f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
@@ -1726,7 +1218,6 @@ def tags_from_sections(sections):
     for section in sections or []:
         for item in section.get("detailListV2", []) or []:
             values.append(item.get("tagName"))
-        # Older response shapes may only contain detailList.
         for item in section.get("detailList", []) or []:
             if isinstance(item, dict):
                 values.append(item.get("tagName") or item.get("name") or item.get("value"))
@@ -1736,7 +1227,6 @@ def tags_from_sections(sections):
 
 
 def profile_card_tags(profile):
-    """Build visible basic and partner-preference tags from the profile API response."""
     basic_seed = [
         f"{profile.get('age')}岁" if profile.get("age") not in (None, "") else "",
         profile.get("marriageString"),
@@ -1824,8 +1314,7 @@ def draw_tag_section(draw, y, title, tags, title_font, tag_font, content_width):
         for tag, pill_width in row:
             draw.rounded_rectangle(
                 (x, y, x + pill_width, y + pill_height),
-                radius=pill_height // 2,
-                fill="#F2F4F7",
+                radius=pill_height // 2, fill="#F2F4F7",
             )
             draw.ellipse((x + 17, y + pill_height // 2 - 4, x + 25, y + pill_height // 2 + 4), fill="#64748B")
             draw.text((x + 36, y + (pill_height - tag_height) // 2 - 2), tag, font=tag_font, fill="#1D2939")
@@ -1835,7 +1324,6 @@ def draw_tag_section(draw, y, title, tags, title_font, tag_font, content_width):
 
 
 def render_profile_card(profile, output_path):
-    """Render a Telegram-ready profile card matching the basic/preference tag layout."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     width = 1080
@@ -1844,7 +1332,6 @@ def render_profile_card(profile, output_path):
     title_font = find_font(50, bold=True)
     tag_font = find_font(34)
 
-    # First pass measures sections on a temporary image.
     measure = Image.new("RGB", (width, 200), "white")
     measure_draw = ImageDraw.Draw(measure)
     basic_tags, partner_tags = profile_card_tags(profile)
@@ -1865,20 +1352,7 @@ def render_profile_card(profile, output_path):
     return output_path
 
 
-def cleanup_old_cards():
-    if not CARD_DIR.exists():
-        return
-    cutoff = time.time() - CARD_TTL_DAYS * 86400
-    for card in CARD_DIR.glob("*.png"):
-        try:
-            if card.stat().st_mtime < cutoff:
-                card.unlink()
-        except OSError:
-            pass
-
-
 def parse_beijing_certification_time(certification_time):
-    """Parse stored certification timestamps as Asia/Shanghai local time."""
     try:
         return datetime.strptime((certification_time or "")[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=BEIJING_TZ)
     except (TypeError, ValueError):
@@ -1886,7 +1360,6 @@ def parse_beijing_certification_time(certification_time):
 
 
 def certification_within_window(certification_time, hours=CERTIFICATION_WINDOW_HOURS, now=None):
-    """Return true only for timestamps in the trailing real-time window in Beijing time."""
     certification_dt = parse_beijing_certification_time(certification_time)
     if certification_dt is None:
         return False
@@ -1899,7 +1372,6 @@ def certification_within_window(certification_time, hours=CERTIFICATION_WINDOW_H
 
 
 def age_in_push_range(age_text):
-    """Return true only for members inside the independent group-push age range."""
     try:
         age = int(str(age_text or "").strip())
     except (TypeError, ValueError):
@@ -1940,7 +1412,6 @@ def text_caption(user):
 
 
 def card_caption(user):
-    """Keep image-card captions compact; the card itself contains the detailed fields."""
     return " | ".join((
         f"ID:{user.get('member_id', '')}",
         str(user.get("nickname", "") or ""),
@@ -1950,7 +1421,6 @@ def card_caption(user):
 
 
 def telegram_response_ok(response, method):
-    """Return Telegram success and retain a redacted, actionable failure message in the dashboard log."""
     if response.ok:
         return True
     description = ""
@@ -1985,7 +1455,6 @@ def send_card(card_path, caption):
 
 
 def get_avatar_url(profile, user):
-    """Prefer the current detail response and fall back to the stored avatar URL."""
     for value in (
         profile.get("avatarURL"), profile.get("avatarUrl"), profile.get("avatar"),
         user.get("avatar_url"),
@@ -1997,7 +1466,6 @@ def get_avatar_url(profile, user):
 
 
 def download_avatar(avatar_url):
-    """Download and validate a public profile avatar as a temporary Telegram photo."""
     if not avatar_url:
         return None
     try:
@@ -2027,7 +1495,6 @@ def download_avatar(avatar_url):
 
 
 def send_profile_album_to_chat(chat_id, avatar_path, card_path, caption):
-    """Send the avatar first and the profile details card second as one Telegram album."""
     media = [
         {"type": "photo", "media": "attach://avatar", "caption": caption},
         {"type": "photo", "media": "attach://profile_card"},
@@ -2050,7 +1517,6 @@ def send_profile_album(avatar_path, card_path, caption):
 
 
 def telegram_profile_lookup(chat_id, member_ids):
-    """Reply in an authorized private chat with an avatar and profile card per ID."""
     if not SCREENSHOT_TOKEN:
         telegram_control_reply(chat_id, "⚠️ 未配置资料查询凭据，暂时无法生成资料卡。")
         return
@@ -2154,7 +1620,6 @@ def push_new_candidates():
 
 
 def group_push_reporter():
-    # Replaces the former cron job, so no additional project file is required.
     time.sleep(10)
     while True:
         try:
@@ -2178,7 +1643,6 @@ def telegram_control_reply(chat_id, text):
 
 
 def format_group_stats_report():
-    """Format the US instance's compact Beijing-time push-count report."""
     now = datetime.now(BEIJING_TZ)
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -2191,9 +1655,7 @@ def format_group_stats_report():
         ).fetchone()[0]
         total_pushed = connection.execute("SELECT COUNT(DISTINCT member_id) FROM pushed_ids").fetchone()[0]
     return "\n".join((
-        "━━━━━━━━━━",
-        "『 八 方 来 财 』",
-        "━━━━━━━━━━",
+        "━━━━━━━━━━", "『 八 方 来 财 』", "━━━━━━━━━━",
         f"💭 当日实时：{today_pushed}条",
         f"📅 昨日推送：{yesterday_pushed}条",
         "━━━━━━━━━━",
@@ -2257,7 +1719,6 @@ def format_runtime_status():
 
 
 def telegram_control_reporter():
-    """Poll private commands from one authorized Telegram user only."""
     if not TG_BOT_TOKEN or not TG_CONTROL_USER_ID:
         return
     offset = int(get_state("telegram_control_offset", "0") or 0)
@@ -2321,8 +1782,7 @@ def telegram_control_reporter():
                         threading.Thread(
                             target=telegram_profile_lookup,
                             args=(str(chat.get("id", reply_chat)), member_ids),
-                            daemon=True,
-                            name="tg-private-profile-lookup",
+                            daemon=True, name="tg-private-profile-lookup",
                         ).start()
                     else:
                         telegram_control_reply(reply_chat, "可用命令：/start_collect 开启、/stop_collect 暂停、/status 状态；也可直接发送一个或多个用户ID查询资料卡和照片。")
@@ -2926,7 +2386,6 @@ fetch('/status').then(response => response.json()).then(status => {
 
 
 def start_background_threads():
-    threading.Thread(target=tg_hourly_reporter, daemon=True, name="tg-status-reporter").start()
     threading.Thread(target=tg_daily_push_reporter, daemon=True, name="tg-daily-push-reporter").start()
     threading.Thread(target=group_push_reporter, daemon=True, name="tg-profile-card-reporter").start()
     threading.Thread(target=telegram_control_reporter, daemon=True, name="tg-private-control-reporter").start()
@@ -2938,5 +2397,5 @@ if __name__ == "__main__":
     init_db()
     migrate_legacy_files()
     start_background_threads()
-    print(f"🚀 {INSTANCE_NAME} 服务启动 → http://localhost:7860")
+    print("🚀 TON MAN 2.0 单文件服务启动 → http://localhost:7860")
     app.run(host="0.0.0.0", port=7860, debug=False, threaded=True)
