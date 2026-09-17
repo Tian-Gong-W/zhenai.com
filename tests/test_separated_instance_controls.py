@@ -6,9 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-for filename, expected_tag in (
-    ("dahai.py", "【大海】"),
-    ("laoying.py", "【老鹰】"),
+for filename, expected_instance_name in (
+    ("dahai.py", "dahai"),
+    ("laoying.py", "laoying"),
 ):
     with tempfile.TemporaryDirectory() as temp_dir:
         os.environ["ZHENAI_BASE_DIR"] = temp_dir
@@ -50,8 +50,9 @@ for filename, expected_tag in (
         assert service.parse_control_command("/start_collect@TopMan_ZiYuan_bot") == ("start", None)
         assert service.parse_control_command("/start_collect@Other_bot") == (None, None)
 
-        # 5. Tag identity
-        assert service.INSTANCE_TAG == expected_tag
+        # 5. Tag identity (names removed as requested)
+        assert service.INSTANCE_NAME == expected_instance_name
+        assert service.INSTANCE_TAG == ""
 
 os.environ.pop("ZHENAI_BASE_DIR", None)
 print("PASS: keyword-only start/stop and group ID targeting work correctly")

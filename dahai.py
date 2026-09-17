@@ -27,8 +27,8 @@ from PIL import Image, ImageDraw, ImageFont
 BASE_DIR = os.environ.get("ZHENAI_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "zhenai.db")
 INSTANCE_NAME = "dahai"
-INSTANCE_LABEL = "大海（新加坡）"
-INSTANCE_TAG = "【大海】"
+INSTANCE_LABEL = ""
+INSTANCE_TAG = ""
 
 
 def load_local_env(env_path):
@@ -1805,7 +1805,7 @@ def group_control_authorized(chat, sender):
 
 def group_control_help():
     return "\n".join((
-        f"🤖 {INSTANCE_TAG}群控制菜单", "━━━━━━━━━━",
+        "🤖 群控制菜单", "━━━━━━━━━━",
         "• 启动：发送「启动」或「/start_collect」",
         "• 停止：发送「停止」或「关闭」或「/stop_collect」",
         "• 指定群ID：发送「启动 <群ID>」或「停止 <群ID>」",
@@ -1856,19 +1856,19 @@ def telegram_control_reporter():
                         provinces = "、".join(filters["provinces"])
                         telegram_control_reply(
                             reply_chat,
-                            f"{INSTANCE_TAG}✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
-                            if ok else f"{INSTANCE_TAG}⚠️ 启动失败：{detail}",
+                            f"✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
+                            if ok else f"⚠️ 启动失败：{detail}",
                         )
                     elif action == "stop":
                         cancel_auto_restart()
                         set_state("crawl_intent", "stopped")
                         manual_stop_requested.set()
                         crawl_running.clear()
-                        telegram_control_reply(reply_chat, f"{INSTANCE_TAG}⏹️ 已发送暂停请求，自动循环已取消。")
+                        telegram_control_reply(reply_chat, "⏹️ 已发送暂停请求，自动循环已取消。")
                     elif action == "status":
-                        telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_runtime_status()}")
+                        telegram_control_reply(reply_chat, format_runtime_status())
                     elif action == "stats":
-                        telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_group_stats_report()}")
+                        telegram_control_reply(reply_chat, format_group_stats_report())
                     elif action == "help":
                         telegram_control_reply(reply_chat, group_control_help())
                 except Exception as update_err:
