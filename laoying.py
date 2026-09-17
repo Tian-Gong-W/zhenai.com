@@ -48,12 +48,11 @@ load_local_env(Path(BASE_DIR) / ".env")
 MY_TOKEN = os.environ.get("MY_TOKEN", "")
 MY_SEED = os.environ.get("MY_SEED", "")
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
-TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
-TG_CONTROL_CHAT_ID = os.environ.get("TG_CONTROL_CHAT_ID", "")
-TG_CONTROL_USER_ID = os.environ.get("TG_CONTROL_USER_ID", "")
+TG_GROUP_CONTROL_USER_ID = os.environ.get(
+    "TG_GROUP_CONTROL_USER_ID", os.environ.get("TG_CONTROL_USER_ID", "")
+)
 TG_BOT_USERNAME = os.environ.get("TG_BOT_USERNAME", "TopMan_ZiYuan_bot")
-TG_PRIVATE_PUSH_ENABLED = os.environ.get("TG_PRIVATE_PUSH_ENABLED", "0") == "1"
 SCREENSHOT_TOKEN = os.environ.get("SCREENSHOT_TOKEN", "") or MY_TOKEN
 SCREENSHOT_SEED = os.environ.get("SCREENSHOT_SEED", "")
 TG_PROFILE_CARD_ENABLED = os.environ.get("TG_PROFILE_CARD_ENABLED", "1") != "0"
@@ -733,7 +732,7 @@ def clear_live_log_history():
     """Compatibility hook: console/Telegram operation has no dashboard log buffer."""
     return None
 
-def send_start_report(age_begin, age_end, gender, cert_days):
+def send_start_report(age_begin, age_end):
     if not TG_BOT_TOKEN:
         return
     now = datetime.now(BEIJING_TZ)
@@ -747,27 +746,14 @@ def send_start_report(age_begin, age_end, gender, cert_days):
         "━━━━━━━━━━━━━━━━",
         f"时间：{now.month}-{now.strftime('%d %H：%M')}",
     ))
-    for chat_id in dict.fromkeys(((TG_CHAT_ID if TG_PRIVATE_PUSH_ENABLED else ""), GROUP_CHAT_ID)):
+    for chat_id in (GROUP_CHAT_ID,):
         if not chat_id:
             continue
         try:
-            response = requests.post(
+            requests.post(
                 f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": message}, timeout=10,
             )
-            if response.ok and os.environ.get("AUTO_DELETE_START_REPORT", "1") != "0":
-                try:
-                    message_id = response.json().get("result", {}).get("message_id")
-                    if message_id:
-                        time.sleep(_env_int("START_REPORT_DELETE_DELAY_SECONDS", 3))
-                        delete_response = requests.post(
-                            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/deleteMessage",
-                            json={"chat_id": chat_id, "message_id": message_id}, timeout=10,
-                        )
-                        if not delete_response.ok:
-                            emit(f"启动报备自动撤回失败：HTTP {delete_response.status_code}")
-                except (ValueError, TypeError, requests.RequestException):
-                    emit("启动报备自动撤回失败，不影响采集任务。")
         except requests.RequestException:
             emit("启动报备发送失败，不影响采集任务。")
 
@@ -934,7 +920,8 @@ def _launch_crawl(auto_started=False):
         daemon=True,
     )
     crawl_thread.start()
-    threading.Thread(target=send_start_report, args=(age_begin, age_end, gender, extra[3]), daemon=True).start()
+    if not auto_started:
+        threading.Thread(target=send_start_report, args=(age_begin, age_end), daemon=True).start()
     return True, ""
 
 
@@ -1668,10 +1655,71 @@ def format_runtime_status():
     ))
 
 
-def telegram_control_reporter():
-    if not TG_BOT_TOKEN or not TG_CONTROL_USER_ID:
+GROUP_COMMANDS = (
+    {"command": "start_collect", "description": "启动采集"},
+    {"command": "stop_collect", "description": "暂停采集"},
+    {"command": "status", "description": "查看采集状态"},
+    {"command": "stats", "description": "查看推送统计"},
+    {"command": "help", "description": "查看控制菜单"},
+)
+
+
+def install_group_command_menu():
+    """Register the Telegram command menu in the configured target group."""
+    if not TG_BOT_TOKEN or not GROUP_CHAT_ID:
         return
-    offset = int(get_state("telegram_control_offset", "0") or 0)
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/setMyCommands",
+            json={
+                "commands": GROUP_COMMANDS,
+                "scope": {"type": "chat", "chat_id": GROUP_CHAT_ID},
+            },
+            timeout=15,
+        )
+        if telegram_response_ok(response, "setMyCommands"):
+            emit("✅ 群控制菜单已更新：启动、暂停、状态、统计。")
+    except requests.RequestException as error:
+        emit(f"群控制菜单注册失败：{type(error).__name__}")
+
+
+def group_command_name(text):
+    """Normalize Telegram group commands, including /command@bot syntax."""
+    command = str(text or "").strip().split(maxsplit=1)[0].lower()
+    if "@" in command:
+        command, mention = command.split("@", 1)
+        if mention != TG_BOT_USERNAME.lower():
+            return ""
+    return command
+
+
+def group_control_authorized(chat, sender):
+    return (
+        chat.get("type") in {"group", "supergroup"}
+        and str(chat.get("id", "")) == str(GROUP_CHAT_ID)
+        and bool(TG_GROUP_CONTROL_USER_ID)
+        and str(sender.get("id", "")) == str(TG_GROUP_CONTROL_USER_ID)
+    )
+
+
+def group_control_help():
+    return "\n".join((
+        "🤖 群控制菜单", "━━━━━━━━━━",
+        "/start_collect — 启动采集",
+        "/stop_collect — 暂停采集并取消自动循环",
+        "/status — 查看当前状态",
+        "/stats — 查看推送统计",
+        "━━━━━━━━━━", "仅授权管理员可操作。",
+    ))
+
+
+def telegram_control_reporter():
+    """Process controls only from the configured group and authorized account."""
+    if not TG_BOT_TOKEN or not GROUP_CHAT_ID or not TG_GROUP_CONTROL_USER_ID:
+        emit("⚠️ 群控制未启用：请配置 GROUP_CHAT_ID 和 TG_GROUP_CONTROL_USER_ID。")
+        return
+    install_group_command_menu()
+    offset = int(get_state("telegram_group_control_offset", "0") or 0)
     while True:
         try:
             response = requests.get(
@@ -1680,73 +1728,47 @@ def telegram_control_reporter():
                 timeout=35,
             )
             response.raise_for_status()
-            updates = response.json().get("result", [])
-            for update in updates:
+            for update in response.json().get("result", []):
                 offset = max(offset, int(update.get("update_id", 0)) + 1)
-                set_state("telegram_control_offset", str(offset))
+                set_state("telegram_group_control_offset", str(offset))
                 message = update.get("message") or {}
                 chat = message.get("chat") or {}
                 sender = message.get("from") or {}
-                if chat.get("type") != "private" or str(sender.get("id", "")) != str(TG_CONTROL_USER_ID):
-                    if (
-                        chat.get("type") in {"group", "supergroup"}
-                        and str(chat.get("id", "")) == str(GROUP_CHAT_ID)
-                        and (
-                            f"@{TG_BOT_USERNAME}".lower() in str(message.get("text", "")).lower()
-                            or str(message.get("text", "")).strip().lower() in {"/stats", "/统计"}
-                            or str(message.get("text", "")).strip().lower().startswith(f"/stats@{TG_BOT_USERNAME}".lower())
-                        )
-                    ):
-                        try:
-                            response = requests.post(
-                                f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
-                                json={"chat_id": chat.get("id"), "text": format_group_stats_report()}, timeout=15,
-                            )
-                            telegram_response_ok(response, "group.stats.sendMessage")
-                        except (OSError, requests.RequestException, sqlite3.Error):
-                            emit("群内统计发送失败，不影响采集任务。")
+                if not group_control_authorized(chat, sender):
                     continue
-                text = str(message.get("text", "") or "").strip()
-                command = text.split()[0].lower() if text else ""
-                reply_chat = str(TG_CONTROL_CHAT_ID or chat.get("id", ""))
-                if command in {"/start", "/start_collect", "/开启采集", "开启采集"}:
+                command = group_command_name(message.get("text", ""))
+                reply_chat = str(chat.get("id", ""))
+                if command in {"/start", "/start_collect", "/开启采集"}:
                     with start_lock:
                         ok, detail = _launch_crawl()
-                    age_begin = DEFAULT_SEARCH_CONFIG["age_begin"]
-                    age_end = DEFAULT_SEARCH_CONFIG["age_end"]
-                    provinces = "、".join(get_run_filter_config()["provinces"])
-                    telegram_control_reply(reply_chat, f"✅ 已启动{provinces} {age_begin}–{age_end} 岁采集。" if ok else f"⚠️ 启动失败：{detail}")
-                elif command in {"/stop", "/stop_collect", "/暂停采集", "/关闭采集", "暂停采集", "关闭采集"}:
+                    filters = get_run_filter_config()
+                    provinces = "、".join(filters["provinces"])
+                    telegram_control_reply(
+                        reply_chat,
+                        f"✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
+                        if ok else f"⚠️ 启动失败：{detail}",
+                    )
+                elif command in {"/stop", "/stop_collect", "/暂停采集", "/关闭采集"}:
                     cancel_auto_restart()
                     set_state("crawl_intent", "stopped")
                     manual_stop_requested.set()
                     crawl_running.clear()
-                    telegram_control_reply(reply_chat, "⏹️ 已发送暂停请求，不会自动启动下一轮。")
-                elif command in {"/status", "/状态", "状态"}:
+                    telegram_control_reply(reply_chat, "⏹️ 已发送暂停请求，自动循环已取消。")
+                elif command in {"/status", "/状态"}:
                     telegram_control_reply(reply_chat, format_runtime_status())
-                else:
-                    member_ids = list(dict.fromkeys(re.findall(r"(?<!\d)\d{5,12}(?!\d)", text)))
-                    if member_ids:
-                        member_ids = member_ids[:20]
-                        telegram_control_reply(reply_chat, f"🔎 已收到 {len(member_ids)} 个ID，正在查询资料卡和照片…")
-                        threading.Thread(
-                            target=telegram_profile_lookup,
-                            args=(str(chat.get("id", reply_chat)), member_ids),
-                            daemon=True, name="tg-private-profile-lookup",
-                        ).start()
-                    else:
-                        telegram_control_reply(reply_chat, "可用命令：/start_collect 开启、/stop_collect 暂停、/status 状态；也可直接发送一个或多个用户ID查询资料卡和照片。")
+                elif command in {"/stats", "/统计"}:
+                    telegram_control_reply(reply_chat, format_group_stats_report())
+                elif command in {"/help", "/菜单"}:
+                    telegram_control_reply(reply_chat, group_control_help())
         except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as error:
-            emit(f"Telegram 私聊控制检查失败：{type(error).__name__}")
+            emit(f"Telegram 群控制检查失败：{type(error).__name__}")
             time.sleep(10)
 
 
 def start_background_threads():
     threading.Thread(target=tg_daily_push_reporter, daemon=True, name="tg-daily-push-reporter").start()
     threading.Thread(target=group_push_reporter, daemon=True, name="tg-profile-card-reporter").start()
-    threading.Thread(target=telegram_control_reporter, daemon=True, name="tg-private-control-reporter").start()
-    resume_auto_restart_if_pending()
-    threading.Thread(target=resume_crawl_if_intended, daemon=True, name="crawl-resume-on-start").start()
+    threading.Thread(target=telegram_control_reporter, daemon=True, name="tg-group-control-reporter").start()
 
 
 if __name__ == "__main__":
