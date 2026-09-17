@@ -1780,7 +1780,10 @@ def parse_control_command(text):
 
 def group_command_name(text):
     """Normalize Telegram group commands, including /command@bot syntax."""
-    command = str(text or "").strip().split(maxsplit=1)[0].lower()
+    tokens = str(text or "").strip().split(maxsplit=1)
+    if not tokens:
+        return ""
+    command = tokens[0].lower()
     if "@" in command:
         command, mention = command.split("@", 1)
         bot_username = TG_BOT_USERNAME.lstrip("@").lower()
@@ -1828,48 +1831,51 @@ def telegram_control_reporter():
             )
             response.raise_for_status()
             for update in response.json().get("result", []):
-                offset = max(offset, int(update.get("update_id", 0)) + 1)
-                set_state("telegram_group_control_offset", str(offset))
-                message = update.get("message") or {}
-                chat = message.get("chat") or {}
-                sender = message.get("from") or {}
-                if not group_control_authorized(chat, sender):
-                    continue
-                raw_text = str(message.get("text", "") or "").strip()
-                action, target_chat_id = parse_control_command(raw_text)
-                if not action:
-                    continue
+                try:
+                    offset = max(offset, int(update.get("update_id", 0)) + 1)
+                    set_state("telegram_group_control_offset", str(offset))
+                    message = update.get("message") or {}
+                    chat = message.get("chat") or {}
+                    sender = message.get("from") or {}
+                    if not group_control_authorized(chat, sender):
+                        continue
+                    raw_text = str(message.get("text", "") or "").strip()
+                    action, target_chat_id = parse_control_command(raw_text)
+                    if not action:
+                        continue
 
-                # 如果指令指定了目标群ID，仅在目标群ID与本实例 GROUP_CHAT_ID 匹配时才执行
-                if target_chat_id and not chat_ids_match(target_chat_id, GROUP_CHAT_ID):
-                    continue
+                    # 如果指令指定了目标群ID，仅在目标群ID与本实例 GROUP_CHAT_ID 匹配时才执行
+                    if target_chat_id and not chat_ids_match(target_chat_id, GROUP_CHAT_ID):
+                        continue
 
-                reply_chat = str(chat.get("id", ""))
-                if action == "start":
-                    with start_lock:
-                        ok, detail = _launch_crawl()
-                    filters = get_run_filter_config()
-                    provinces = "、".join(filters["provinces"])
-                    telegram_control_reply(
-                        reply_chat,
-                        f"{INSTANCE_TAG}✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
-                        if ok else f"{INSTANCE_TAG}⚠️ 启动失败：{detail}",
-                    )
-                elif action == "stop":
-                    cancel_auto_restart()
-                    set_state("crawl_intent", "stopped")
-                    manual_stop_requested.set()
-                    crawl_running.clear()
-                    telegram_control_reply(reply_chat, f"{INSTANCE_TAG}⏹️ 已发送暂停请求，自动循环已取消。")
-                elif action == "status":
-                    telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_runtime_status()}")
-                elif action == "stats":
-                    telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_group_stats_report()}")
-                elif action == "help":
-                    telegram_control_reply(reply_chat, group_control_help())
-        except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as error:
-            emit(f"Telegram 群控制检查失败：{type(error).__name__}")
-            time.sleep(10)
+                    reply_chat = str(chat.get("id", ""))
+                    if action == "start":
+                        with start_lock:
+                            ok, detail = _launch_crawl()
+                        filters = get_run_filter_config()
+                        provinces = "、".join(filters["provinces"])
+                        telegram_control_reply(
+                            reply_chat,
+                            f"{INSTANCE_TAG}✅ 已启动采集：{provinces}｜{filters['age_begin']}–{filters['age_end']}岁。"
+                            if ok else f"{INSTANCE_TAG}⚠️ 启动失败：{detail}",
+                        )
+                    elif action == "stop":
+                        cancel_auto_restart()
+                        set_state("crawl_intent", "stopped")
+                        manual_stop_requested.set()
+                        crawl_running.clear()
+                        telegram_control_reply(reply_chat, f"{INSTANCE_TAG}⏹️ 已发送暂停请求，自动循环已取消。")
+                    elif action == "status":
+                        telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_runtime_status()}")
+                    elif action == "stats":
+                        telegram_control_reply(reply_chat, f"{INSTANCE_TAG}\n{format_group_stats_report()}")
+                    elif action == "help":
+                        telegram_control_reply(reply_chat, group_control_help())
+                except Exception as update_err:
+                    emit(f"处理群消息异常：{type(update_err).__name__}: {update_err}")
+        except Exception as error:
+            emit(f"Telegram 群控制检查失败：{type(error).__name__}: {error}")
+            time.sleep(5)
 
 
 def start_background_threads():
