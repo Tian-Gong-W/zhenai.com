@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
             return {"isError": False, "data": {"list": [], "hasNext": False}}
 
     crawler = service.ZhenaiCrawler(token="token", seedtoken="")
-    crawler.session.post = lambda _url, data, headers: captured_payload.update(data) or FakeResponse()
+    crawler.session.post = lambda _url, data, headers, **kwargs: captured_payload.update(data) or FakeResponse()
     crawler.search_members(page=2, page_size=20, age_begin=40, age_end=65, work_city=110100, gender=1, salary_begin=-1)
     assert captured_payload["salaryBegin"] == -1
     assert captured_payload["salaryEnd"] == -1

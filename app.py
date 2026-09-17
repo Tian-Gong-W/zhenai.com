@@ -741,7 +741,9 @@ class ZhenaiCrawler:
             "ua":                req_ua,
         }
         try:
-            resp = self.session.post(url, data=payload, headers=self._common_headers(req_ua))
+            resp = self.session.post(
+                url, data=payload, headers=self._common_headers(req_ua), timeout=(10, 45)
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("isError"):
@@ -767,7 +769,9 @@ class ZhenaiCrawler:
         req_ua = self.generate_ua()
         params = {"objectID": object_id, "wxApp": 1, "location": 0, "_method": "GET", "ua": req_ua}
         try:
-            resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
+            resp = self.session.get(
+                url, params=params, headers=self._common_headers(req_ua), timeout=(10, 45)
+            )
             if resp.status_code == 200:
                 return resp.json().get("data", {})
             print(f"获取会员 {object_id} 资料失败: {resp.status_code}")
@@ -815,7 +819,9 @@ class ZhenaiCrawler:
                 "_method": "GET", "ua": req_ua,
             }
             try:
-                resp = self.session.get(url, params=params, headers=self._common_headers(req_ua))
+                resp = self.session.get(
+                    url, params=params, headers=self._common_headers(req_ua), timeout=(10, 45)
+                )
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
                     page_list = data.get("list", [])
