@@ -1272,23 +1272,10 @@ def send_start_report(age_begin, age_end):
         if not chat_id:
             continue
         try:
-            response = requests.post(
+            requests.post(
                 f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": message}, timeout=10,
             )
-            if response.ok and os.environ.get("AUTO_DELETE_START_REPORT", "1") != "0":
-                try:
-                    message_id = response.json().get("result", {}).get("message_id")
-                    if message_id:
-                        time.sleep(_env_int("START_REPORT_DELETE_DELAY_SECONDS", 3))
-                        delete_response = requests.post(
-                            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/deleteMessage",
-                            json={"chat_id": chat_id, "message_id": message_id}, timeout=10,
-                        )
-                        if not delete_response.ok:
-                            emit(f"启动报备自动撤回失败：HTTP {delete_response.status_code}")
-                except (ValueError, TypeError, requests.RequestException):
-                    emit("启动报备自动撤回失败，不影响采集任务。")
         except requests.RequestException:
             emit("启动报备发送失败，不影响采集任务。")
 
@@ -1464,7 +1451,8 @@ def _launch_crawl(auto_started=False):
         target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra, location_mode), daemon=True,
     )
     crawl_thread.start()
-    threading.Thread(target=send_start_report, args=(age_begin, age_end), daemon=True).start()
+    if not auto_started:
+        threading.Thread(target=send_start_report, args=(age_begin, age_end), daemon=True).start()
     return True, ""
 
 
