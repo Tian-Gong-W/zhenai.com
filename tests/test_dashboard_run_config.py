@@ -9,7 +9,7 @@ import os
 import tempfile
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parents[1] / "app.py"
+SOURCE = Path(__file__).resolve().parents[1] / "dahai.py"
 SOURCE_TEXT = SOURCE.read_text(encoding="utf-8")
 
 assert "本次新增记录" not in SOURCE_TEXT

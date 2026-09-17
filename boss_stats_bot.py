@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 sys.path.insert(0, "/root/zhenai")
-import app as zhenai_app
+import dahai as zhenai_app
 
 TOKEN = "8749333815:AAHENLL2YmxHtnMuim5m6U5GJ4NJs1P7an4"
 DB = "/root/zhenai/zhenai.db"

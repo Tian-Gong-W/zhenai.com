@@ -5,7 +5,7 @@ import tempfile
 import time
 from pathlib import Path
 
-source = Path(__file__).resolve().parents[1] / "app.py"
+source = Path(__file__).resolve().parents[1] / "dahai.py"
 with tempfile.TemporaryDirectory() as temp_dir:
     os.environ["ZHENAI_BASE_DIR"] = temp_dir
     os.environ["DASHBOARD_ACCESS_TOKEN"] = "test-token"

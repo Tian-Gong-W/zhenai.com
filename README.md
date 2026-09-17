@@ -6,12 +6,12 @@
 
 | 文件 | 用途 |
 |---|---|
-| `app.py` | 唯一应用程序：采集、看板、断点、自动循环、Telegram 推送与认证封面。 |
+| `dahai.py` / `laoying.py` | 两台服务器各自独立的应用程序：采集、看板、断点、自动循环、Telegram 推送与认证封面。 |
 | `cover_background.jpg` | 口令封面横幅。 |
 | `dashboard_background.jpg` | 已登录看板的 50% 透明度背景图。 |
 | `DEPLOYMENT.md` | 部署和更新约定。 |
 
-生产环境仍保持三文件运行目录：`app.py`、`.env` 与 `zhenai.db`。两张图片在部署时写入 `zhenai.db` 的 `site_assets` 表，因此运行目录中不额外保存图片文件。
+生产环境仍保持三文件运行目录：`dahai.py`（新加坡）或 `laoying.py`（美国）、`.env` 与 `zhenai.db`。两张图片在部署时写入 `zhenai.db` 的 `site_assets` 表，因此运行目录中不额外保存图片文件。
 
 ## 当前行为
 

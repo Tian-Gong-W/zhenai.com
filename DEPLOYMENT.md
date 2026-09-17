@@ -16,7 +16,7 @@
 运行目录严格为三个持久文件：
 
 ```text
-/root/zhenai/app.py
+/root/zhenai/dahai.py（新加坡）或 /root/zhenai/laoying.py（美国）
 /root/zhenai/.env
 /root/zhenai/zhenai.db
 ```
@@ -25,7 +25,7 @@
 
 ## 部署注意事项
 
-部署 `app.py` 后，应通过应用初始化确保 SQLite 中存在 `site_assets` 表，并将仓库中的两张 JPEG 图片写入表内：
+部署对应实例脚本后，应通过应用初始化确保 SQLite 中存在 `site_assets` 表，并将仓库中的两张 JPEG 图片写入表内：
 
 | 仓库图片 | SQLite 键 |
 |---|---|

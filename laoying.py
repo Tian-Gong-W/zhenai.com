@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""TON MAN 2.0 single-file service.
+"""Laoying service: dedicated US crawler, dashboard, and Telegram bot.
 
-This file contains the nationwide city crawler, dashboard, Telegram status reporting,
-Telegram profile-card pushes, and all persistence logic. Runtime state is kept only in
-SQLite; credentials remain in .env.
+This file belongs only to the US instance. Runtime state is local SQLite data;
+credentials and US-specific settings remain in the local .env file.
 """
 
 import csv
@@ -32,6 +31,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR = os.environ.get("ZHENAI_BASE_DIR", os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "zhenai.db")
+INSTANCE_NAME = "laoying"
 
 
 def load_local_env(env_path):
@@ -567,70 +567,6 @@ CITY_CODE_MAP = {
 }
 
 # =============================================================================
-# 工具函数
-# =============================================================================
-
-def load_scraped_ids(cache_file="scraped_ids.txt"):
-    scraped = set()
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        scraped.add(line)
-        except Exception as e:
-            print(f"读取历史ID缓存失败: {e}")
-    return scraped
-
-def save_scraped_id(mid, cache_file="scraped_ids.txt"):
-    try:
-        with open(cache_file, "a", encoding="utf-8") as f:
-            f.write(f"{mid}\n")
-    except Exception as e:
-        print(f"保存历史ID缓存失败: {e}")
-
-def ensure_csv_fieldnames(filepath, fieldnames):
-    """旧 CSV 缺 VIP/紫图可见 时升级表头，避免追加错位。"""
-    if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
-        return
-    try:
-        with open(filepath, "r", newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            old_fields = list(reader.fieldnames or [])
-            if old_fields == list(fieldnames):
-                return
-            rows = list(reader)
-        with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            for row in rows:
-                out = {k: (row.get(k) or "") for k in fieldnames}
-                if not out.get("VIP"):
-                    out["VIP"] = "否"
-                if not out.get("紫图可见"):
-                    out["紫图可见"] = "否"
-                writer.writerow(out)
-        print(f"CSV表头已升级为: {','.join(fieldnames)}")
-    except Exception as e:
-        print(f"升级CSV表头失败: {e}")
-
-
-def append_to_csv(record, filepath, fieldnames):
-    file_exists = os.path.exists(filepath) and os.path.getsize(filepath) > 0
-    try:
-        if file_exists:
-            ensure_csv_fieldnames(filepath, fieldnames)
-        with open(filepath, "a", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(record)
-    except Exception as e:
-        print(f"追加写入CSV文件失败: {e}")
-
-
-# =============================================================================
 # 爬虫核心类
 # =============================================================================
 
@@ -894,13 +830,8 @@ class ZhenaiCrawler:
 
 
 # =============================================================================
-# 公共：处理单个会员 ID（查详情 → 过滤 → 抓动态 → 写 CSV）
+# 公共：处理单个会员 ID（查详情 → 过滤 → 抓动态 → 写入 SQLite）
 # =============================================================================
-
-FIELDNAMES = ["ID", "昵称", "性别", "年龄", "居住地", "月收入", "学历", "婚姻状况",
-              "标签", "独白", "头像链接",
-              "最新动态时间", "实名认证时间", "最早动态时间", "VIP", "紫图可见"]
-
 
 def income_meets_minimum(income_text, minimum_income):
     """Return whether a salary band's lower bound meets the configured minimum."""
@@ -917,9 +848,7 @@ def income_meets_minimum(income_text, minimum_income):
     return values[0] >= minimum_income
 
 
-def process_member(crawler, mid, scraped_ids, cache_file,
-                   output_file, gender_filter, city_filter, extra_filters=None,
-                   cert_days=0, minimum_income=0):
+def process_member(crawler, mid, scraped_ids, extra_filters=None, cert_days=0):
     """
     处理单个会员 ID。
     cert_days>0: 先查动态 → 实名不在N天内直接跳过（省1次详情API）
@@ -938,11 +867,11 @@ def process_member(crawler, mid, scraped_ids, cache_file,
         # 没有实名 或 实名超过N天 → 跳过（紫图只打标签，不拦写入）
         if not cert_time:
             scraped_ids.add(mid_str)
-            save_scraped_id(mid_str, cache_file)
+            save_scraped_id(mid_str)
             return False
         if not certification_within_window(cert_time, hours=cert_days * 24):
             scraped_ids.add(mid_str)
-            save_scraped_id(mid_str, cache_file)
+            save_scraped_id(mid_str)
             return False
 
     raw_info = crawler.get_member_profile(mid)
@@ -950,20 +879,10 @@ def process_member(crawler, mid, scraped_ids, cache_file,
 
     # 记录已查询
     scraped_ids.add(mid_str)
-    save_scraped_id(mid_str, cache_file)
+    save_scraped_id(mid_str)
 
     if not parsed:
         print(f"    解析会员 {mid} 失败或返回空")
-        return False
-
-    # 城市过滤
-    if city_filter and city_filter not in parsed["居住地"]:
-        print(f"    跳过: {parsed['昵称']} (居住地: {parsed['居住地']}，不含'{city_filter}')")
-        return False
-
-    # 性别过滤
-    if gender_filter and parsed["性别"] != gender_filter:
-        print(f"    跳过: {parsed['昵称']} (性别: {parsed['性别']}，不符合'{gender_filter}')")
         return False
 
     # 额外过滤（学历/婚姻）；工资条件只用于群推送，不拦截采集入库
@@ -992,7 +911,7 @@ def process_member(crawler, mid, scraped_ids, cache_file,
     parsed["VIP"] = parsed.get("VIP", "否")
     parsed["紫图可见"] = "是" if has_real_moment else "否"
 
-    append_to_csv(parsed, output_file, FIELDNAMES)
+    upsert_member(parsed)
     print(
         f"    🎉 写入: {parsed['昵称']} | {parsed['性别']} | {parsed['年龄']}岁 | "
         f"{parsed['居住地']} | 💰{parsed.get('月收入', '')} | 🎓{parsed.get('学历', '')} | 💍{parsed.get('婚姻状况', '')} | "
@@ -1136,21 +1055,18 @@ def delete_state(key):
         connection.execute("DELETE FROM runtime_state WHERE state_key = ?", (key,))
 
 
-def load_scraped_ids(cache_file=None):
+def load_scraped_ids():
     with DB_LOCK, db_connect() as connection:
         return {row[0] for row in connection.execute("SELECT member_id FROM scraped_ids")}
 
 
-def save_scraped_id(member_id, cache_file=None):
+def save_scraped_id(member_id):
     with DB_LOCK, db_connect() as connection:
         connection.execute("INSERT OR IGNORE INTO scraped_ids(member_id) VALUES(?)", (str(member_id),))
 
 
-def ensure_csv_fieldnames(filepath=None, fieldnames=None):
-    """Compatibility no-op: SQLite stores typed member records without CSV headers."""
-
-
-def append_to_csv(record, filepath=None, fieldnames=None):
+def upsert_member(record):
+    """Write one parsed member record to SQLite, updating an existing ID in place."""
     values = {database_name: str(record.get(csv_name, "") or "") for csv_name, database_name in MEMBER_COLUMNS.items()}
     if not values["member_id"]:
         return
@@ -1180,7 +1096,7 @@ def migrate_legacy_files():
             with legacy_members.open("r", encoding="utf-8-sig", newline="") as handle:
                 for record in csv.DictReader(handle):
                     if (record.get("ID") or "").strip():
-                        append_to_csv(record)
+                        upsert_member(record)
                         imported_members += 1
         if legacy_scraped.exists():
             for member_id in legacy_scraped.read_text(encoding="utf-8").splitlines():
@@ -1338,7 +1254,7 @@ class LogCapture(io.StringIO):
         pass
 
 
-def send_start_report(age_begin, age_end, gender, cert_days):
+def send_start_report(age_begin, age_end):
     if not TG_BOT_TOKEN:
         return
     now = datetime.now(BEIJING_TZ)
@@ -1548,7 +1464,7 @@ def _launch_crawl(auto_started=False):
         target=crawl_worker, args=(provinces, age_begin, age_end, gender, max_pages, extra, location_mode), daemon=True,
     )
     crawl_thread.start()
-    threading.Thread(target=send_start_report, args=(age_begin, age_end, gender, extra[3]), daemon=True).start()
+    threading.Thread(target=send_start_report, args=(age_begin, age_end), daemon=True).start()
     return True, ""
 
 
@@ -1689,10 +1605,7 @@ def run_search(provinces, age_begin, age_end, gender, max_pages, extra=("", "", 
             for member_id in ids:
                 if str(member_id) in scraped or not crawl_running.is_set():
                     continue
-                if process_member(
-                    crawler, member_id, scraped, DB_PATH, DB_PATH, None, None,
-                    extra[:3], extra[3], minimum_income=0,
-                ):
+                if process_member(crawler, member_id, scraped, extra[:3], extra[3]):
                     city_new += 1
                     total_new += 1
                 time.sleep(CRAWL_DELAY_SECONDS)
@@ -3037,5 +2950,5 @@ if __name__ == "__main__":
     init_db()
     migrate_legacy_files()
     start_background_threads()
-    print("🚀 TON MAN 2.0 单文件服务启动 → http://localhost:7860")
+    print(f"🚀 {INSTANCE_NAME} 服务启动 → http://localhost:7860")
     app.run(host="0.0.0.0", port=7860, debug=False, threaded=True)

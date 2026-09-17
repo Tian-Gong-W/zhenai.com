@@ -8,7 +8,7 @@ import os
 import tempfile
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parents[1] / "app.py"
+SOURCE = Path(__file__).resolve().parents[1] / "dahai.py"
 
 with tempfile.TemporaryDirectory() as temp_dir:
     os.environ["ZHENAI_BASE_DIR"] = temp_dir
