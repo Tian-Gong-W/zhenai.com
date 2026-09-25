@@ -519,7 +519,7 @@ class ZhenaiCrawler:
             "multiMarriage": -1, "occupation": -1,
             "multiHomeTown": hometown_city, "multiHouse": -1,
             "car": -1, "multiChildren": -1, "multiConstellation": -1,
-            "avatar": -1, "zhenxin": 1, "identityOk": -1,
+            "avatar": -1, "zhenxin": 1, "identityOk": 1,
             "loginType": 3, "pageSize": page_size, "page": page, "ua": req_ua,
         }
         try:
