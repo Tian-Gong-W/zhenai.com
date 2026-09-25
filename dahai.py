@@ -1619,6 +1619,7 @@ def format_group_stats_report():
     now = datetime.now(BEIJING_TZ)
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    reset_at = get_state("group_stats_reset_at", "0") or "0"
     with DB_LOCK, db_connect() as connection:
         today_pushed = connection.execute(
             "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (today,)
@@ -1626,7 +1627,10 @@ def format_group_stats_report():
         yesterday_pushed = connection.execute(
             "SELECT COUNT(*) FROM pushed_ids WHERE date(datetime(pushed_at, '+8 hours')) = ?", (yesterday,)
         ).fetchone()[0]
-        total_pushed = connection.execute("SELECT COUNT(DISTINCT member_id) FROM pushed_ids").fetchone()[0]
+        total_pushed = connection.execute(
+            "SELECT COUNT(DISTINCT member_id) FROM pushed_ids "
+            "WHERE pushed_at >= datetime(?, 'unixepoch')", (reset_at,)
+        ).fetchone()[0]
     return "\n".join((
         "━━━━━━━━━━", "『 八 方 来 财 』", "━━━━━━━━━━",
         f"💭 当日实时：{today_pushed}条",
