@@ -1795,12 +1795,7 @@ def group_command_name(text):
 def group_control_authorized(chat, sender):
     if chat.get("type") not in {"group", "supergroup"}:
         return False
-    if not chat_ids_match(chat.get("id", ""), GROUP_CHAT_ID):
-        return False
-    if not TG_GROUP_CONTROL_USER_ID:
-        return False
-    authorized_ids = {uid.strip() for uid in str(TG_GROUP_CONTROL_USER_ID).split(",") if uid.strip()}
-    return str(sender.get("id", "")) in authorized_ids
+    return chat_ids_match(chat.get("id", ""), GROUP_CHAT_ID)
 
 
 def group_control_help():
@@ -1811,14 +1806,14 @@ def group_control_help():
         "• 指定群ID：发送「启动 <群ID>」或「停止 <群ID>」",
         "• 状态：发送「状态」或「/status」",
         "• 统计：发送「统计」或「/stats」",
-        "━━━━━━━━━━", f"当前绑定群：{GROUP_CHAT_ID}，仅授权管理员可操作。",
+        "━━━━━━━━━━", f"当前绑定群：{GROUP_CHAT_ID}，群内成员均可操作。",
     ))
 
 
 def telegram_control_reporter():
-    """Process controls only from the configured group and authorized account."""
-    if not TG_BOT_TOKEN or not GROUP_CHAT_ID or not TG_GROUP_CONTROL_USER_ID:
-        emit("⚠️ 群控制未启用：请配置 GROUP_CHAT_ID 和 TG_GROUP_CONTROL_USER_ID。")
+    """Process controls from any member of the configured group only."""
+    if not TG_BOT_TOKEN or not GROUP_CHAT_ID:
+        emit("⚠️ 群控制未启用：请配置 TG_BOT_TOKEN 和 GROUP_CHAT_ID。")
         return
     install_group_command_menu()
     offset = int(get_state("telegram_group_control_offset", "0") or 0)

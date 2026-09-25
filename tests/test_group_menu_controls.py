@@ -15,17 +15,22 @@ for filename in ("dahai.py", "laoying.py"):
         service.init_db()
         service.TG_BOT_TOKEN = "test-token"
         service.GROUP_CHAT_ID = "-100123"
-        service.TG_GROUP_CONTROL_USER_ID = "8400495055"
-
+        if filename != "dahai.py":
+            service.TG_GROUP_CONTROL_USER_ID = "8400495055"
         assert service.group_control_authorized(
             {"type": "supergroup", "id": "-100123"}, {"id": "8400495055"}
         )
         assert not service.group_control_authorized(
             {"type": "private", "id": "8400495055"}, {"id": "8400495055"}
         )
-        assert not service.group_control_authorized(
-            {"type": "supergroup", "id": "-100123"}, {"id": "other"}
-        )
+        if filename == "dahai.py":
+            assert service.group_control_authorized(
+                {"type": "supergroup", "id": "-100123"}, {"id": "other"}
+            )
+        else:
+            assert not service.group_control_authorized(
+                {"type": "supergroup", "id": "-100123"}, {"id": "other"}
+            )
         assert service.group_command_name("/start_collect@TopMan_ZiYuan_bot") == "/start_collect"
         assert service.group_command_name("/start_collect@Other_bot") == ""
 
