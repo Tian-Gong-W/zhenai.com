@@ -33,6 +33,11 @@ for filename in ("dahai.py", "laoying.py"):
             )
         assert service.group_command_name("/start_collect@TopMan_ZiYuan_bot") == "/start_collect"
         assert service.group_command_name("/start_collect@Other_bot") == ""
+        assert service.parse_control_command("启动") == ("start", None)
+        assert service.parse_control_command("停止") == ("stop", None)
+        assert service.parse_control_command("状态") == ("status", None)
+        assert service.parse_control_command("统计") == ("stats", None)
+        assert service.parse_control_command("帮助") == ("help", None)
 
         calls = []
         original_post = service.requests.post
@@ -45,6 +50,12 @@ for filename in ("dahai.py", "laoying.py"):
         assert {item["command"] for item in payload["commands"]} == {
             "start_collect", "stop_collect", "status", "stats", "help"
         }
+        help_text = service.group_control_help()
+        assert "发送「启动」" in help_text
+        assert "发送「停止」" in help_text
+        assert "发送「状态」" in help_text
+        assert "发送「统计」" in help_text
+        assert "发送「帮助」" in help_text
 
         starts = []
         original_thread = service.threading.Thread

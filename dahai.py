@@ -1696,11 +1696,12 @@ def format_runtime_status():
 
 
 GROUP_COMMANDS = (
-    {"command": "start_collect", "description": "启动采集"},
-    {"command": "stop_collect", "description": "暂停采集"},
-    {"command": "status", "description": "查看采集状态"},
-    {"command": "stats", "description": "查看推送统计"},
-    {"command": "help", "description": "查看控制菜单"},
+    # Telegram 的 command 字段只接受英文/数字/下划线；中文可直接发送文本执行。
+    {"command": "start_collect", "description": "启动采集（也可发送：启动）"},
+    {"command": "stop_collect", "description": "停止采集（也可发送：停止）"},
+    {"command": "status", "description": "查看状态（也可发送：状态）"},
+    {"command": "stats", "description": "查看统计（也可发送：统计）"},
+    {"command": "help", "description": "查看帮助（也可发送：帮助）"},
 )
 
 
@@ -1805,11 +1806,13 @@ def group_control_authorized(chat, sender):
 def group_control_help():
     return "\n".join((
         "🤖 群控制菜单", "━━━━━━━━━━",
-        "• 启动：发送「启动」或「/start_collect」",
-        "• 停止：发送「停止」或「关闭」或「/stop_collect」",
+        "• 启动：发送「启动」或点击 /start_collect",
+        "• 停止：发送「停止」或点击 /stop_collect",
+        "• 状态：发送「状态」或点击 /status",
+        "• 统计：发送「统计」或点击 /stats",
+        "• 帮助：发送「帮助」或点击 /help",
+        "• 兼容：开启、暂停、关闭、菜单等中文别名均可用",
         "• 指定群ID：发送「启动 <群ID>」或「停止 <群ID>」",
-        "• 状态：发送「状态」或「/status」",
-        "• 统计：发送「统计」或「/stats」",
         "━━━━━━━━━━", f"当前绑定群：{GROUP_CHAT_ID}，群内成员均可操作。",
     ))
 
