@@ -907,7 +907,11 @@ def cancel_auto_restart(announce=False):
 def _launch_crawl(auto_started=False):
     global crawl_thread
     if crawl_running.is_set():
-        return False, "已有采集任务在运行"
+        if crawl_thread is not None and crawl_thread.is_alive():
+            return False, "已有采集任务在运行"
+        # Worker 已经退出但事件未清理时，允许 Telegram 启动命令恢复采集。
+        crawl_running.clear()
+        emit("⚠️ 检测到采集线程已退出，已清理残留状态并准备重新启动。")
     clear_live_log_history()
     filters = get_run_filter_config()
     provinces = filters["provinces"]
