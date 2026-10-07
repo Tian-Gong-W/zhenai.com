@@ -74,10 +74,14 @@ def _env_list(name, default):
     return values or list(default)
 
 
+EXCLUDED_PROVINCES = {"福建", "新疆", "江苏", "西藏"}
+
 DEFAULT_SEARCH_CONFIG = {
     "provinces": _env_list("SEARCH_PROVINCES", [
-        "上海", "云南", "北京", "四川", "天津", "安徽", "山东", "山西", "广东",
-        "江西", "河北", "河南", "浙江", "海南", "湖北", "湖南", "重庆", "陕西"
+        "北京", "上海", "广东", "天津", "重庆", "安徽", "甘肃", "广西", "贵州",
+        "海南", "河北", "河南", "湖北", "湖南", "江西", "内蒙古", "宁夏",
+        "青海", "山东", "山西", "陕西", "四川", "云南", "浙江", "黑龙江",
+        "吉林", "辽宁"
     ]),
     "age_begin": _env_int("SEARCH_AGE_BEGIN", 40),
     "age_end": _env_int("SEARCH_AGE_END", 65),
@@ -90,7 +94,6 @@ DEFAULT_SEARCH_CONFIG = {
     "marriage_filter": "",
     "cert_days": 3,
 }
-EXCLUDED_PROVINCES = {"福建"}
 PUSH_INTERVAL_SECONDS = 60
 CRAWL_DELAY_SECONDS = 0.5
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
