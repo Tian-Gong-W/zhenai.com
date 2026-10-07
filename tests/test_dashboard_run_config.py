@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
 
     assert not (set(service.selectable_provinces()) & service.EXCLUDED_PROVINCES)
     assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - len(service.EXCLUDED_PROVINCES)
-    assert service.default_run_filter_config()["minimum_income"] == 3000
+    assert service.default_run_filter_config()["minimum_income"] == 5000
     assert service.default_run_filter_config()["push_window_hours"] == 48
     assert (service.DEFAULT_SEARCH_CONFIG["age_begin"], service.DEFAULT_SEARCH_CONFIG["age_end"]) == (40, 65)
     assert (service.PUSH_AGE_BEGIN, service.PUSH_AGE_END) == (40, 65)

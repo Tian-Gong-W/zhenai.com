@@ -87,7 +87,7 @@ DEFAULT_SEARCH_CONFIG = {
     "age_end": _env_int("SEARCH_AGE_END", 65),
     "gender": "女",
     "max_pages": _env_int("MAX_CITY_PAGES", 49),
-    "minimum_income": 3000,
+    "minimum_income": 5000,
     "push_window_hours": _env_int("PUSH_WINDOW_HOURS", 48),
     "income_filter": "",
     "education_filter": "",
