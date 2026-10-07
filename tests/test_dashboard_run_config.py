@@ -31,16 +31,16 @@ with tempfile.TemporaryDirectory() as temp_dir:
     spec.loader.exec_module(service)
     service.init_db()
 
-    assert "福建" not in service.selectable_provinces()
-    assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - 1
+    assert not (set(service.selectable_provinces()) & service.EXCLUDED_PROVINCES)
+    assert len(service.selectable_provinces()) == len(service.PROVINCE_MAP) - len(service.EXCLUDED_PROVINCES)
     assert service.default_run_filter_config()["minimum_income"] == 3000
     assert service.default_run_filter_config()["push_window_hours"] == 48
     assert (service.DEFAULT_SEARCH_CONFIG["age_begin"], service.DEFAULT_SEARCH_CONFIG["age_end"]) == (40, 65)
-    assert (service.PUSH_AGE_BEGIN, service.PUSH_AGE_END) == (45, 60)
-    assert service.age_in_push_range("45") is True
-    assert service.age_in_push_range("60") is True
-    assert service.age_in_push_range("44") is False
-    assert service.age_in_push_range("61") is False
+    assert (service.PUSH_AGE_BEGIN, service.PUSH_AGE_END) == (40, 65)
+    assert service.age_in_push_range("40") is True
+    assert service.age_in_push_range("65") is True
+    assert service.age_in_push_range("39") is False
+    assert service.age_in_push_range("66") is False
     assert service.age_in_push_range("—") is False
     assert service.MIN_SELECTED_PROVINCES == 15
 
@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
 
     for invalid in (
         {"provinces": [], "minimum_income": 3000, "push_window_hours": 48},
-        {"provinces": ["福建"], "minimum_income": 3000, "push_window_hours": 48},
+        {"provinces": ["新疆"], "minimum_income": 3000, "push_window_hours": 48},
         {"provinces": service.selectable_provinces()[:14], "minimum_income": 3000, "push_window_hours": 48},
         {"provinces": ["北京"], "minimum_income": 4000, "push_window_hours": 48},
         {"provinces": ["北京"], "minimum_income": 3000, "push_window_hours": 36},
@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
         response = client.get("/api/run-config")
         assert response.status_code == 200
         result = response.get_json()
-        assert "福建" not in result["provinces"]
+        assert not (set(result["provinces"]) & service.EXCLUDED_PROVINCES)
         assert result["income_options"] == [0, 3000, 5000, 8000, 12000]
         assert result["push_window_options"] == [24, 40, 48]
         assert [40, 65] in result["age_options"]
